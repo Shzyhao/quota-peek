@@ -65,3 +65,9 @@ npm run desktop:dist     # NSIS 安装包（打包器需访问 GitHub，建议�
 - Kimi 会员编程套餐因服务端 CORS 预检 404 无法自动查询（手动维护）
 - 桌面版托盘图标暂为静态色；密钥存储在 WebView localStorage（后续规划迁移 Windows 凭据管理器）
 - 各查询接口为非正式文档端点（有官方插件 / CLI 背书），上游变更需更新适配器
+
+## 开源协议与参与贡献
+
+- 代码以 **[MIT](./LICENSE)** 协议开源，可自由使用、修改与分发（保留版权声明即可）
+- 欢迎 [Issue](https://github.com/Shzyhao/quota-peek/issues) 反馈问题、[PR](https://github.com/Shzyhao/quota-peek/pulls) 参与贡献，流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)
+- 安全问题请勿开公开 Issue，报告渠道见 [SECURITY.md](./SECURITY.md)
