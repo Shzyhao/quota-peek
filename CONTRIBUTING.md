@@ -4,7 +4,7 @@
 
 ## 开发环境
 
-- Node.js ≥ 20
+- Node.js ≥ 22（建议 24；jsdom 依赖的 undici 在 Node 20 上缺少所需 API）
 - Rust stable（仅桌面壳需要，配合 Tauri 2）
 - 网页版不需要 Rust，只跑前端即可
 
