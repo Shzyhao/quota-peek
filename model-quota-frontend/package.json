@@ -1,0 +1,19 @@
+{
+  "name": "model-quota-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "看额度（原：模型额度查询）- 轻量级本地纯前端小工具，查询并记录多家大模型供应商的余额与套餐额度",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}

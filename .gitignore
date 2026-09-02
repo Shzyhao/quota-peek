@@ -1,0 +1,29 @@
+# Node
+node_modules/
+dist/
+*.local
+
+# Rust / Tauri 构建产物
+src-tauri/target/
+src-tauri/gen/schemas/
+*.pdb
+
+# Tauri 本地缓存（NSIS 下载等）
+AppData/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# 环境与敏感信息
+.env
+.env.*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.sw?
