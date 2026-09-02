@@ -1,5 +1,5 @@
 import { PROVIDER_TYPES, getProviderType } from '../core/providers.js';
-import { sortProviders, filterProviders } from '../core/status.js';
+import { sortProviders, filterProviders, collectAlerts } from '../core/status.js';
 import { normalizeProviderConfig } from '../core/storage.js';
 import { buildBackup, parseBackup, applyBackup } from '../core/backup.js';
 import { getStoredTheme, setStoredTheme, applyTheme, THEMES } from '../core/theme.js';
@@ -31,6 +31,28 @@ export function renderApp({ root, repo, logger, service }) {
   let busy = false;
   let autoTimer = null;
   const uiState = { query: '', statusFilter: 'all' };
+  // 本次会话已弹窗提醒过的供应商 id：同一告警只提醒一次，恢复正常后从集合移除（下次再告警会重新提醒）
+  const alertedIds = new Set();
+
+  // ——— 低额度弹窗提醒 ———
+  async function maybeAlert() {
+    if (!settings.alertPopup) return;
+    const alerts = collectAlerts(repo.listProviders(), settings);
+    for (const id of [...alertedIds]) {
+      if (!alerts.some((a) => a.id === id)) alertedIds.delete(id);
+    }
+    const fresh = alerts.filter((a) => !alertedIds.has(a.id));
+    if (!fresh.length) return;
+    fresh.forEach((a) => alertedIds.add(a.id));
+    await styledConfirm({
+      mount: document.body,
+      title: `低额度提醒：${fresh.length} 家需要关注`,
+      message: fresh.map((a) => `【${a.name}】${a.reasons.join('；')}`).join('\n'),
+      confirmText: '知道了',
+      cancelText: '关闭',
+      danger: true,
+    });
+  }
 
   // ——— 刷新 ———
   function scheduleAutoRefresh() {
@@ -54,6 +76,7 @@ export function renderApp({ root, repo, logger, service }) {
     } finally {
       busy = false;
       render();
+      void maybeAlert();
     }
   }
 
@@ -66,6 +89,7 @@ export function renderApp({ root, repo, logger, service }) {
     } finally {
       busy = false;
       render();
+      void maybeAlert();
     }
   }
 
@@ -329,6 +353,13 @@ export function renderApp({ root, repo, logger, service }) {
     if (filterSelect) {
       uiState.statusFilter = filterSelect.value;
       renderContentView();
+      return;
+    }
+    const toggle = e.target.closest('[data-setting-bool]');
+    if (toggle) {
+      settings = { ...settings, [toggle.dataset.settingBool]: toggle.checked };
+      repo.saveSettings(settings);
+      render();
       return;
     }
     const input = e.target.closest('[data-setting]');

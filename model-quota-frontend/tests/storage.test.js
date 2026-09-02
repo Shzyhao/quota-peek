@@ -87,6 +87,7 @@ describe('createRepository', () => {
       lowRemainingPercent: 10,
       expiryWarningDays: 7,
       autoRefreshMinutes: 0,
+      alertPopup: false,
     });
 
     storage.setItem('mqc.settings', JSON.stringify({ autoRefreshMinutes: 30 }));

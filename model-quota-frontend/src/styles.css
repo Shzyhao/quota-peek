@@ -871,6 +871,27 @@ body {
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
+/* 布尔开关行（如低额度弹窗提醒） */
+.setting-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  line-height: 1.55;
+}
+
+.setting-toggle input {
+  margin-top: 2px;
+  accent-color: var(--primary);
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
 .settings-hint {
   margin: 12px 0 0;
   font-size: 12.5px;

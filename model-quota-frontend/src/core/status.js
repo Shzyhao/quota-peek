@@ -23,7 +23,23 @@ export function defaultSettings() {
     lowRemainingPercent: 10, // 剩余额度占总额度百分比低于该值提醒
     expiryWarningDays: 7, // 到期前 N 天提醒
     autoRefreshMinutes: 0, // 定时刷新间隔（分钟），0 = 关闭
+    alertPopup: false, // 低额度弹窗提醒：刷新后检测到新的告警时弹窗提示
   };
+}
+
+// 弹窗提醒用的告警集合：warn/error 级（余额/额度/到期/查询失败），不含停用与「不支持自动查询」
+export function collectAlerts(list, settings = defaultSettings()) {
+  return list
+    .filter((p) => p.enabled !== false)
+    .map((p) => ({ p, health: evaluateProvider(p, settings) }))
+    .filter(({ health }) => health.level === 'warn' || health.level === 'error')
+    .map(({ p, health }) => ({
+      id: p.id,
+      name: p.name,
+      level: health.level,
+      label: health.label,
+      reasons: health.reasons,
+    }));
 }
 
 // 计算距离到期日还有几个自然日（当天到期算 0，已过期为负数）

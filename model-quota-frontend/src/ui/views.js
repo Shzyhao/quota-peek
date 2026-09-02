@@ -303,6 +303,7 @@ export function settingsView(ctx) {
           <label>到期提醒（提前天数）<input data-setting="expiryWarningDays" type="number" min="0" value="${settings.expiryWarningDays}"></label>
           <label>定时刷新（分钟，0 = 关闭）<input data-setting="autoRefreshMinutes" type="number" min="0" value="${settings.autoRefreshMinutes}"></label>
         </div>
+        <label class="setting-toggle"><input data-setting-bool="alertPopup" type="checkbox" ${settings.alertPopup ? 'checked' : ''}>低额度弹窗提醒 —— 刷新后检测到新的余额 / 额度 / 到期 / 查询失败告警时弹窗提示（同一告警只提醒一次，恢复正常后重新计数）</label>
       </section>
 
       <section class="settings-card">

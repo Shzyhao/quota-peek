@@ -518,3 +518,52 @@ describe('迷你小窗口视图', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('低额度弹窗提醒', () => {
+  const lowBalanceBody = { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '5.00' }] };
+  const okBodyHigh = { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '500.00' }] };
+
+  it('默认关闭不弹窗；开启后刷新检测到告警弹窗，同一告警去重，恢复正常后重新计数', async () => {
+    // 默认关闭：刷新出低余额卡片但不弹窗
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
+    const { root } = seedApp([deepseek()]);
+    root.querySelector('[data-action="refresh-all"]').click();
+    await vi.waitFor(() => expect(root.innerHTML).toContain('¥5.00'));
+    await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeFalsy());
+
+    // 设置页开启开关
+    navTo(root, 'settings');
+    const toggle = root.querySelector('[data-setting-bool="alertPopup"]');
+    expect(toggle).toBeTruthy();
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(root.querySelector('[data-setting-bool="alertPopup"]').checked).toBe(true);
+
+    // 回总览刷新 → 弹窗出现，含供应商名与原因
+    navTo(root, 'overview');
+    root.querySelector('[data-action="refresh-all"]').click();
+    await vi.waitFor(() => {
+      const modal = document.querySelector('.confirm-modal');
+      expect(modal).toBeTruthy();
+      expect(modal.textContent).toContain('低额度提醒');
+      expect(modal.textContent).toContain('DeepSeek 主账号');
+      expect(modal.textContent).toContain('余额过低');
+    });
+    document.querySelector('.confirm-modal [data-action="confirm-accept"]').click();
+    await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeFalsy());
+
+    // 同一告警仍在：再刷新不重复弹窗
+    root.querySelector('[data-action="refresh-all"]').click();
+    await vi.waitFor(() => expect(root.innerHTML).toContain('¥5.00'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.querySelector('.confirm-modal')).toBeFalsy();
+
+    // 恢复正常后重新计数：余额回升刷新不弹，再次跌破后重新弹窗
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => okBodyHigh }));
+    root.querySelector('[data-action="refresh-all"]').click();
+    await vi.waitFor(() => expect(root.innerHTML).toContain('¥500.00'));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
+    root.querySelector('[data-action="refresh-all"]').click();
+    await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeTruthy());
+  });
+});

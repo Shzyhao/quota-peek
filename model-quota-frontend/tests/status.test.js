@@ -6,6 +6,7 @@ import {
   defaultSettings,
   sortProviders,
   filterProviders,
+  collectAlerts,
 } from '../src/core/status.js';
 
 const NOW = new Date('2026-09-01T10:00:00');
@@ -216,5 +217,27 @@ describe('sortProviders / filterProviders', () => {
     const list = build();
     const out = filterProviders(list, settings, { query: 'beta', status: 'attention' });
     expect(out.map((p) => p.id)).toEqual(['b']);
+  });
+});
+
+describe('collectAlerts（低额度弹窗提醒的告警集合）', () => {
+  it('收集 warn/error 级供应商及原因，跳过正常、停用与不支持自动查询', () => {
+    const settings = defaultSettings();
+    const list = [
+      config({ id: 'low', name: '余额不足', lastQuery: { status: 'ok', time: NOW.toISOString(), balance: 5, currency: 'CNY', usage: null } }),
+      config({ id: 'fail', name: '查询失败', lastQuery: { status: 'failed', time: NOW.toISOString(), error: 'x', balance: null, currency: null, usage: null } }),
+      config({ id: 'fine', name: '正常', lastQuery: { status: 'ok', time: NOW.toISOString(), balance: 100, currency: 'CNY', usage: null } }),
+      config({ id: 'paused', name: '已停用', enabled: false }),
+      config({ id: 'manual', name: '手动', type: 'custom', apiKey: '' }),
+    ];
+    const alerts = collectAlerts(list, settings);
+    expect(alerts.map((a) => a.id)).toEqual(['low', 'fail']);
+    expect(alerts[0]).toMatchObject({ id: 'low', name: '余额不足', level: 'warn' });
+    expect(alerts[0].reasons.join()).toContain('余额过低');
+    expect(alerts[1].level).toBe('error');
+  });
+
+  it('空列表返回空集合', () => {
+    expect(collectAlerts([], defaultSettings())).toEqual([]);
   });
 });
