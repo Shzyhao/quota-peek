@@ -567,3 +567,51 @@ describe('低额度弹窗提醒', () => {
     await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeTruthy());
   });
 });
+
+describe('桌面悬浮球开关（顶栏按钮 + 设置页）', () => {
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  it('网页版（无 __TAURI__）：顶栏不渲染悬浮球按钮，设置页不显示悬浮球开关', () => {
+    const { root } = seedApp([], { view: 'settings' });
+    expect(root.querySelector('[data-action="toggle-ball"]')).toBeNull();
+    expect(root.querySelector('[data-ball-toggle]')).toBeNull();
+  });
+
+  it('桌面版：状态广播驱动按钮高亮与设置页开关同步；点击/勾选发出 set-ball', async () => {
+    const emitted = [];
+    const handlers = {};
+    globalThis.__TAURI__ = {
+      event: {
+        emit: (name, payload) => emitted.push([name, payload]),
+        listen: async (name, handler) => {
+          handlers[name] = handler;
+          return () => {};
+        },
+      },
+    };
+    const { root } = seedApp([], { view: 'settings' });
+    // 启动时请求一次当前状态
+    expect(emitted).toContainEqual(['ball-state-request', undefined]);
+    // 后端广播「开启」→ 设置页开关勾选
+    await handlers['ball-state-changed']({ payload: true });
+    expect(root.querySelector('[data-ball-toggle]').checked).toBe(true);
+    // 取消勾选 → set-ball(false)
+    const toggle = root.querySelector('[data-ball-toggle]');
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(emitted).toContainEqual(['set-ball', false]);
+    // 广播「关闭」→ 开关取消；顶栏按钮（切回总览）不带 active
+    await handlers['ball-state-changed']({ payload: false });
+    expect(root.querySelector('[data-ball-toggle]').checked).toBe(false);
+    window.location.hash = '#/overview';
+    root.dispatchEvent(new Event('hashchange'));
+    const btn = root.querySelector('[data-action="toggle-ball"]');
+    expect(btn).toBeTruthy();
+    expect(btn.classList.contains('active')).toBe(false);
+    // 点击顶栏按钮 → set-ball(true)（当前关闭，切换为开）
+    btn.click();
+    expect(emitted).toContainEqual(['set-ball', true]);
+  });
+});

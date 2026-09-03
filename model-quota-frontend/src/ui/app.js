@@ -31,8 +31,11 @@ export function renderApp({ root, repo, logger, service }) {
   let busy = false;
   let autoTimer = null;
   const uiState = { query: '', statusFilter: 'all' };
-  // 本次会话已弹窗提醒过的供应商 id：同一告警只提醒一次，恢复正常后从集合移除（下次再告警会重新提醒）
+  // 本次会话已弹窗提醒过的供应商 id：同一告警只提醒一次，恢复正常后从集合移除（下次再告警会重新计数）
   const alertedIds = new Set();
+  // 桌面悬浮球开关状态（仅桌面壳 __TAURI__ 环境使用；由后端 ball-state-changed 事件驱动）
+  let ballOn = false;
+  const tauriEvents = globalThis.__TAURI__?.event;
 
   // ——— 低额度弹窗提醒 ———
   async function maybeAlert() {
@@ -240,6 +243,14 @@ export function renderApp({ root, repo, logger, service }) {
     render();
   }
 
+  // ——— 桌面悬浮球开关（顶栏按钮 + 设置页）———
+  function syncBallUi() {
+    const btn = root.querySelector('[data-action="toggle-ball"]');
+    if (btn) btn.classList.toggle('active', ballOn);
+    const toggle = root.querySelector('[data-ball-toggle]');
+    if (toggle) toggle.checked = ballOn;
+  }
+
   // ——— 渲染 ———
   function renderContentView() {
     const view = currentView();
@@ -250,6 +261,8 @@ export function renderApp({ root, repo, logger, service }) {
       busy,
       query: uiState.query,
       statusFilter: uiState.statusFilter,
+      isDesktop: !!tauriEvents,
+      ballVisible: ballOn,
     };
     const content = root.querySelector('[data-role="view-content"]');
     if (content) content.innerHTML = VIEW_RENDERERS[view](ctx);
@@ -291,6 +304,7 @@ export function renderApp({ root, repo, logger, service }) {
             <h1 data-role="view-title">${viewTitle(view)}</h1>
             <div class="actions">
               <button class="btn icon-btn" data-action="theme-cycle" title="切换主题（当前：${theme === 'auto' ? '跟随系统' : theme === 'light' ? '浅色' : '深色'}）" aria-label="切换主题">◐</button>
+              ${tauriEvents ? `<button class="btn icon-btn ${ballOn ? 'active' : ''}" data-action="toggle-ball" title="悬浮球（当前：${ballOn ? '已开启' : '已关闭'}）" aria-label="悬浮球开关"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/></svg></button>` : ''}
               <button class="btn primary ${busy ? 'is-loading' : ''}" data-action="refresh-all" ${busy ? 'disabled' : ''}>
                 <span class="btn-spinner" aria-hidden="true"></span>${busy ? '刷新中…' : '↻ 一键刷新全部'}
               </button>
@@ -327,6 +341,8 @@ export function renderApp({ root, repo, logger, service }) {
       window.open(`${location.pathname}?view=mini`, 'mqc-mini', 'width=360,height=600');
     } else if (action === 'theme-cycle') {
       cycleTheme();
+    } else if (action === 'toggle-ball') {
+      tauriEvents?.emit?.('set-ball', !ballOn);
     } else if (action === 'export-backup') {
       exportBackup();
     } else if (action === 'import-backup') {
@@ -337,6 +353,11 @@ export function renderApp({ root, repo, logger, service }) {
   });
 
   root.addEventListener('change', (e) => {
+    const ballToggle = e.target.closest('[data-ball-toggle]');
+    if (ballToggle) {
+      tauriEvents?.emit?.('set-ball', ballToggle.checked);
+      return;
+    }
     const themeSelect = e.target.closest('[data-setting-theme]');
     if (themeSelect) {
       setStoredTheme(themeSelect.value);
@@ -399,6 +420,15 @@ export function renderApp({ root, repo, logger, service }) {
   });
 
   globalThis.addEventListener('hashchange', render);
+
+  // 桌面壳：订阅悬浮球状态广播（顶栏按钮/设置页开关同步），并请求一次当前状态
+  if (tauriEvents?.listen) {
+    void tauriEvents.listen('ball-state-changed', (e) => {
+      ballOn = e.payload === true;
+      syncBallUi();
+    });
+    tauriEvents.emit('ball-state-request');
+  }
 
   scheduleAutoRefresh();
   render();

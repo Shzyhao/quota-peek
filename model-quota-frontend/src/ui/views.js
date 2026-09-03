@@ -291,7 +291,7 @@ export function logsView(ctx) {
 
 // —— 设置 ——
 export function settingsView(ctx) {
-  const { settings } = ctx;
+  const { settings, isDesktop, ballVisible } = ctx;
   const theme = getStoredTheme();
   return `
     <div class="settings-layout">
@@ -318,6 +318,8 @@ export function settingsView(ctx) {
           </label>
         </div>
         <p class="settings-hint">当前生效：${THEME_LABELS[theme]}；深色模式同样作用于迷你小窗口。</p>
+        ${isDesktop ? `
+        <label class="setting-toggle"><input data-ball-toggle type="checkbox" ${ballVisible ? 'checked' : ''}>桌面悬浮球 —— 置顶圆形小窗常驻桌面（蓝=正常 / 琥珀=低值提醒 / 红=异常），单击展开速览、拖动移动位置；也可从顶栏或托盘菜单开关</label>` : ''}
       </section>
 
       <section class="settings-card">

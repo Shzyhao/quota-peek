@@ -21,30 +21,33 @@ export function openProviderForm({ mount, providerTypes, existing, onSave }) {
   const num = (v) => (existing && v != null ? v : '');
 
   overlay.innerHTML = `
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal form-modal" role="dialog" aria-modal="true">
       <h2>${isEdit ? '编辑供应商' : '添加供应商'}</h2>
       <div class="form-grid">
         <label>供应商名称 *<input name="name" placeholder="例如：DeepSeek 主账号" value="${escapeHtml(existing ? existing.name : '')}"></label>
         <label>供应商类型
           <select name="type">${typeOptions}</select>
         </label>
-        <label><span data-role="api-label">API Key</span>
+        <label class="full"><span data-role="api-label">API Key</span>
           <input name="apiKey" type="password" autocomplete="off" placeholder="${
-            isEdit ? `${maskApiKey(existing.apiKey)}（留空表示不修改）` : '仅保存在本地浏览器，界面与日志中均脱敏'
+            isEdit ? `${maskApiKey(existing.apiKey)}（留空表示不修改）` : '仅保存在本地，界面与日志中均脱敏'
           }">
         </label>
-        <label data-role="secret-field" hidden><span data-role="secret-label">Secret Access Key</span>
+        <label class="full" data-role="secret-field" hidden><span data-role="secret-label">Secret Access Key</span>
           <input name="apiSecret" type="password" autocomplete="off" placeholder="${
             isEdit && existing.apiSecret ? `${maskApiKey(existing.apiSecret)}（留空表示不修改）` : '与 AccessKey ID 配套的私有密钥'
           }">
         </label>
-        <label>Base URL<input name="baseUrl" placeholder="留空使用官方默认地址"></label>
+        <label class="full">Base URL<input name="baseUrl" placeholder="留空使用官方默认地址"></label>
+      </div>
+      <p class="form-divider">额度信息 <i>（可选 · 不支持自动查询的供应商手动维护）</i></p>
+      <div class="form-grid">
         <label>套餐总额度<input name="planTotalQuota" type="number" step="any" min="0" placeholder="手动填写" value="${num(existing?.planTotalQuota)}"></label>
         <label>已用额度<input name="usedQuota" type="number" step="any" min="0" placeholder="手动填写" value="${num(existing?.usedQuota)}"></label>
-        <label>剩余额度<input name="remainingQuota" type="number" step="any" min="0" placeholder="留空时按 总额度 − 已用 自动计算" value="${num(existing?.remainingQuota)}"></label>
+        <label>剩余额度<input name="remainingQuota" type="number" step="any" min="0" placeholder="留空按 总额度 − 已用 计算" value="${num(existing?.remainingQuota)}"></label>
         <label>到期时间<input name="expiryDate" type="date" value="${existing ? existing.expiryDate || '' : ''}"></label>
         <label class="full">备注<input name="note" placeholder="可选" value="${escapeHtml(existing ? existing.note || '' : '')}"></label>
-        <label class="checkbox"><input name="enabled" type="checkbox" ${!existing || existing.enabled !== false ? 'checked' : ''}> 启用（停用后不参与一键与定时刷新）</label>
+        <label class="checkbox full"><input name="enabled" type="checkbox" ${!existing || existing.enabled !== false ? 'checked' : ''}> 启用（停用后不参与一键与定时刷新）</label>
       </div>
       <p class="form-error" data-error hidden></p>
       <div class="modal-actions">
