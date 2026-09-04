@@ -11,6 +11,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_notification::NotificationExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -29,6 +30,13 @@ struct BallPrefs {
     x: Option<i32>,
     #[serde(default)]
     y: Option<i32>,
+}
+
+/// 前端 show-notify 事件载荷：系统通知标题与正文
+#[derive(serde::Deserialize)]
+struct NotifyPayload {
+    title: String,
+    body: String,
 }
 
 struct ShellState {
@@ -235,6 +243,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app);
         }))
+        // 系统通知（低额度提醒走 Windows 原生 Toast，由 Rust 端发送）
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let prefs = load_prefs(app.app_handle());
             let start_ball = prefs.visible;
@@ -324,6 +334,24 @@ pub fn run() {
             let app_for_query = app.app_handle().clone();
             app.listen("ball-state-request", move |_| {
                 broadcast_ball_state(&app_for_query);
+            });
+
+            // 前端事件：低额度系统通知，由 Rust 端发原生 Toast
+            let app_for_notify = app.app_handle().clone();
+            app.listen("show-notify", move |event| {
+                let Ok(payload) = serde_json::from_str::<NotifyPayload>(event.payload()) else { return };
+                let result = app_for_notify
+                    .notification()
+                    .builder()
+                    .title(&payload.title)
+                    .body(&payload.body)
+                    .show();
+                // 诊断：Toast 静默失败（如裸 exe 无 AUMID/开始菜单快捷方式）时落盘错误详情
+                if let Err(e) = result {
+                    if let Some(dir) = app_for_notify.path().app_config_dir().ok() {
+                        let _ = std::fs::write(dir.join("notify-error.txt"), format!("{e:?}"));
+                    }
+                }
             });
 
             // 上次开着悬浮球：启动即恢复

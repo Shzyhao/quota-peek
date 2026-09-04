@@ -79,7 +79,7 @@ describe('createRepository', () => {
     expect(repo.listProviders()).toEqual([]);
   });
 
-  it('设置读取时与默认值合并、保存后可回读', () => {
+  it('设置读取时与默认值合并、保存后可回读；旧 alertPopup 自动迁移为 alertMethod', () => {
     const storage = memoryStorage();
     const repo = createRepository(storage);
     expect(repo.loadSettings()).toEqual({
@@ -87,7 +87,7 @@ describe('createRepository', () => {
       lowRemainingPercent: 10,
       expiryWarningDays: 7,
       autoRefreshMinutes: 0,
-      alertPopup: false,
+      alertMethod: 'popup',
     });
 
     storage.setItem('mqc.settings', JSON.stringify({ autoRefreshMinutes: 30 }));
@@ -96,6 +96,15 @@ describe('createRepository', () => {
 
     repo.saveSettings({ ...repo.loadSettings(), lowBalanceThreshold: 20 });
     expect(repo.loadSettings().lowBalanceThreshold).toBe(20);
+
+    // 旧版 alertPopup(bool) 迁移：true → popup，false → 关闭
+    storage.setItem('mqc.settings', JSON.stringify({ alertPopup: true }));
+    expect(repo.loadSettings().alertMethod).toBe('popup');
+    storage.setItem('mqc.settings', JSON.stringify({ alertPopup: false }));
+    expect(repo.loadSettings().alertMethod).toBe('');
+    // 已有 alertMethod 时以新值为准，alertPopup 不再参与
+    storage.setItem('mqc.settings', JSON.stringify({ alertPopup: true, alertMethod: 'notify' }));
+    expect(repo.loadSettings().alertMethod).toBe('notify');
   });
 
   it('日志保存与读取', () => {

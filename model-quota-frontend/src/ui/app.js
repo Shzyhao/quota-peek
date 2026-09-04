@@ -37,9 +37,9 @@ export function renderApp({ root, repo, logger, service }) {
   let ballOn = false;
   const tauriEvents = globalThis.__TAURI__?.event;
 
-  // ——— 低额度弹窗提醒 ———
+  // ——— 低额度提醒（'popup' 界面弹窗 / 'notify' 桌面系统通知 / '' 关闭）———
   async function maybeAlert() {
-    if (!settings.alertPopup) return;
+    if (!settings.alertMethod) return;
     const alerts = collectAlerts(repo.listProviders(), settings);
     for (const id of [...alertedIds]) {
       if (!alerts.some((a) => a.id === id)) alertedIds.delete(id);
@@ -47,10 +47,17 @@ export function renderApp({ root, repo, logger, service }) {
     const fresh = alerts.filter((a) => !alertedIds.has(a.id));
     if (!fresh.length) return;
     fresh.forEach((a) => alertedIds.add(a.id));
+    const title = `低额度提醒：${fresh.length} 家需要关注`;
+    const body = fresh.map((a) => `【${a.name}】${a.reasons.join('；')}`).join('\n');
+    // 系统通知走桌面壳原生 Toast；网页版（无 __TAURI__）回退界面弹窗
+    if (settings.alertMethod === 'notify' && globalThis.__TAURI__?.event) {
+      globalThis.__TAURI__.event.emit('show-notify', { title, body });
+      return;
+    }
     await styledConfirm({
       mount: document.body,
-      title: `低额度提醒：${fresh.length} 家需要关注`,
-      message: fresh.map((a) => `【${a.name}】${a.reasons.join('；')}`).join('\n'),
+      title,
+      message: body,
       confirmText: '知道了',
       cancelText: '关闭',
       danger: true,
@@ -362,6 +369,13 @@ export function renderApp({ root, repo, logger, service }) {
     if (themeSelect) {
       setStoredTheme(themeSelect.value);
       applyTheme(themeSelect.value);
+      render();
+      return;
+    }
+    const alertSelect = e.target.closest('[data-setting-alertmethod]');
+    if (alertSelect) {
+      settings = { ...settings, alertMethod: alertSelect.value };
+      repo.saveSettings(settings);
       render();
       return;
     }

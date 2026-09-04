@@ -23,7 +23,7 @@ export function defaultSettings() {
     lowRemainingPercent: 10, // 剩余额度占总额度百分比低于该值提醒
     expiryWarningDays: 7, // 到期前 N 天提醒
     autoRefreshMinutes: 0, // 定时刷新间隔（分钟），0 = 关闭
-    alertPopup: false, // 低额度弹窗提醒：刷新后检测到新的告警时弹窗提示
+    alertMethod: 'popup', // 低额度提醒方式：'' 关闭 / 'popup' 界面弹窗 / 'notify' 系统通知
   };
 }
 

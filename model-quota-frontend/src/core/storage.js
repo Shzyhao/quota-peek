@@ -116,7 +116,15 @@ export function createRepository(storage = safeStorage()) {
       write(STORAGE_KEYS.logs, logs);
     },
 
-    loadSettings: () => ({ ...defaultSettings(), ...read(STORAGE_KEYS.settings, {}) }),
+    loadSettings() {
+      const stored = read(STORAGE_KEYS.settings, {});
+      const merged = { ...defaultSettings(), ...stored };
+      // 旧版 alertPopup(bool) 一次性迁移为 alertMethod；存储中已有 alertMethod 后以新值为准
+      if (stored.alertPopup != null && stored.alertMethod == null) {
+        merged.alertMethod = stored.alertPopup ? 'popup' : '';
+      }
+      return merged;
+    },
 
     saveSettings(settings) {
       write(STORAGE_KEYS.settings, settings);

@@ -519,28 +519,13 @@ describe('迷你小窗口视图', () => {
   });
 });
 
-describe('低额度弹窗提醒', () => {
+describe('低额度提醒（弹窗 / 系统通知 / 关闭）', () => {
   const lowBalanceBody = { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '5.00' }] };
   const okBodyHigh = { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '500.00' }] };
 
-  it('默认关闭不弹窗；开启后刷新检测到告警弹窗，同一告警去重，恢复正常后重新计数', async () => {
-    // 默认关闭：刷新出低余额卡片但不弹窗
+  it('默认界面弹窗：刷新检测到告警弹窗，同一告警去重，恢复正常后重新计数', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
     const { root } = seedApp([deepseek()]);
-    root.querySelector('[data-action="refresh-all"]').click();
-    await vi.waitFor(() => expect(root.innerHTML).toContain('¥5.00'));
-    await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeFalsy());
-
-    // 设置页开启开关
-    navTo(root, 'settings');
-    const toggle = root.querySelector('[data-setting-bool="alertPopup"]');
-    expect(toggle).toBeTruthy();
-    toggle.checked = true;
-    toggle.dispatchEvent(new Event('change', { bubbles: true }));
-    expect(root.querySelector('[data-setting-bool="alertPopup"]').checked).toBe(true);
-
-    // 回总览刷新 → 弹窗出现，含供应商名与原因
-    navTo(root, 'overview');
     root.querySelector('[data-action="refresh-all"]').click();
     await vi.waitFor(() => {
       const modal = document.querySelector('.confirm-modal');
@@ -565,6 +550,57 @@ describe('低额度弹窗提醒', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
     root.querySelector('[data-action="refresh-all"]').click();
     await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeTruthy());
+  });
+
+  it('设置为系统通知：桌面壳 emit show-notify 且不弹界面弹窗；网页版回退弹窗', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
+
+    // 桌面壳环境：emit 事件、无 confirm-modal
+    const emitted = [];
+    globalThis.__TAURI__ = { event: { emit: (name, payload) => emitted.push([name, payload]) } };
+    try {
+      const { root } = seedApp([deepseek()], { view: 'settings' });
+      const select = root.querySelector('[data-setting-alertmethod]');
+      expect(select).toBeTruthy();
+      select.value = 'notify';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(root.querySelector('[data-setting-alertmethod]').value).toBe('notify');
+
+      root.querySelector('[data-action="refresh-all"]').click();
+      await vi.waitFor(() => {
+        const hit = emitted.find(([name]) => name === 'show-notify');
+        expect(hit).toBeTruthy();
+        expect(hit[1].title).toContain('低额度提醒');
+        expect(hit[1].body).toContain('DeepSeek 主账号');
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(document.querySelector('.confirm-modal')).toBeFalsy();
+    } finally {
+      delete globalThis.__TAURI__;
+      document.body.innerHTML = '';
+    }
+
+    // 网页版（无 __TAURI__）选系统通知：回退界面弹窗
+    const { root } = seedApp([deepseek()], { view: 'settings' });
+    const select = root.querySelector('[data-setting-alertmethod]');
+    select.value = 'notify';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    root.querySelector('[data-action="refresh-all"]').click();
+    await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeTruthy());
+  });
+
+  it('设置为关闭：刷新出告警不提醒', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
+    const { root } = seedApp([deepseek()], { view: 'settings' });
+    const select = root.querySelector('[data-setting-alertmethod]');
+    select.value = '';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    navTo(root, 'overview');
+    root.querySelector('[data-action="refresh-all"]').click();
+    await vi.waitFor(() => expect(root.innerHTML).toContain('¥5.00'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.querySelector('.confirm-modal')).toBeFalsy();
   });
 });
 

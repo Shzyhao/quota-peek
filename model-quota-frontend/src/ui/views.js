@@ -302,8 +302,15 @@ export function settingsView(ctx) {
           <label>剩余额度过低（≤ %）<input data-setting="lowRemainingPercent" type="number" min="0" max="100" value="${settings.lowRemainingPercent}"></label>
           <label>到期提醒（提前天数）<input data-setting="expiryWarningDays" type="number" min="0" value="${settings.expiryWarningDays}"></label>
           <label>定时刷新（分钟，0 = 关闭）<input data-setting="autoRefreshMinutes" type="number" min="0" value="${settings.autoRefreshMinutes}"></label>
+          <label>低额度提醒方式
+            <select data-setting-alertmethod>
+              <option value="" ${settings.alertMethod === '' ? 'selected' : ''}>关闭</option>
+              <option value="popup" ${settings.alertMethod === 'popup' ? 'selected' : ''}>界面弹窗</option>
+              <option value="notify" ${settings.alertMethod === 'notify' ? 'selected' : ''}>系统通知</option>
+            </select>
+          </label>
         </div>
-        <label class="setting-toggle"><input data-setting-bool="alertPopup" type="checkbox" ${settings.alertPopup ? 'checked' : ''}>低额度弹窗提醒 —— 刷新后检测到新的余额 / 额度 / 到期 / 查询失败告警时弹窗提示（同一告警只提醒一次，恢复正常后重新计数）</label>
+        <p class="settings-hint">刷新后检测到新的余额 / 额度 / 到期 / 查询失败告警时提醒（同一告警只提醒一次，恢复正常后重新计数）；系统通知为 Windows 原生 Toast，网页版自动回退界面弹窗。</p>
       </section>
 
       <section class="settings-card">
