@@ -942,7 +942,8 @@ body {
   border-radius: var(--radius-l);
   box-shadow: var(--shadow-2);
   padding: 18px 20px;
-  width: min(520px, 100%);
+  /* 比默认略宽：两列字段更宽松（小视口仍自适应铺满） */
+  width: min(680px, 100%);
   max-height: 88vh;
   overflow: auto;
   animation: modal-in 200ms var(--ease);
@@ -1051,6 +1052,41 @@ body {
   color: var(--error);
   font-size: 12.5px;
   margin: 12px 0 0;
+}
+
+/* Base URL 行：输入框 + 测试链接按钮并排 */
+.url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.url-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.url-row .btn.small {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.test-result {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.test-result.ok {
+  color: var(--ok);
+}
+
+.test-result.fail {
+  color: var(--error);
+}
+
+.test-result.warn {
+  color: var(--warn);
 }
 
 .modal-actions {

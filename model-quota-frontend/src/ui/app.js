@@ -134,6 +134,13 @@ export function renderApp({ root, repo, logger, service }) {
       mount: document.body,
       providerTypes: PROVIDER_TYPES,
       existing,
+      // 现有名称列表（编辑时用于排除自身后查重）
+      existingNames: repo.listProviders().map((p) => p.name),
+      // 连通性测试：直接调用类型适配器，不入库不写日志（失败信息在表单内展示）
+      testConnection: async ({ type, apiKey, apiSecret, baseUrl }) => {
+        const def = getProviderType(type);
+        return def.query({ apiKey, apiSecret, baseUrl, fetchImpl: globalThis.fetch });
+      },
       onSave: saveProviderFromForm,
     });
   }

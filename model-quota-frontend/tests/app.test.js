@@ -474,6 +474,91 @@ describe('添加/编辑表单', () => {
     expect(onSave).not.toHaveBeenCalled();
     expect(document.querySelector('.modal-overlay')).toBeNull();
   });
+
+  it('切换类型自动带出默认供应商名称（手动名称保留），重名自动 _N 后缀', () => {
+    const onSave = vi.fn();
+    openProviderForm({
+      mount: document.body,
+      providerTypes: PROVIDER_TYPES,
+      existing: null,
+      onSave,
+      existingNames: ['DeepSeek', 'DeepSeek_2'],
+    });
+
+    const modal = document.querySelector('.modal-overlay');
+    const $ = (name) => modal.querySelector(`[name="${name}"]`);
+
+    // 初始为空 → 切到智谱带出「智谱 GLM Coding Plan」
+    const typeSelect = $('type');
+    typeSelect.value = 'zhipu';
+    typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    expect($('name').value).toBe('智谱 GLM Coding Plan');
+
+    // 手动改名后切类型：自定义名称保留不被覆盖
+    $('name').value = '我的智谱';
+    typeSelect.value = 'moonshot';
+    typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    expect($('name').value).toBe('我的智谱');
+
+    // 名称仍是类型默认名时再切类型：跟随带出新默认名（「我的智谱」是手动名不受影响，
+    // 这里先手动还原为默认名场景验证）
+    $('name').value = 'Kimi / Moonshot'; // 上一默认名
+    typeSelect.value = 'deepseek';
+    typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    expect($('name').value).toBe('DeepSeek');
+    $('apiKey').value = 'sk-x';
+    modal.querySelector('[data-action="save"]').click();
+    // 「DeepSeek」「DeepSeek_2」均已存在 → 自动取 _3
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ name: 'DeepSeek_3' }));
+  });
+
+  it('测试链接：调用注入的 testConnection 并展示结果（成功/失败/缺密钥提示）', async () => {
+    const onSave = vi.fn();
+    const testConnection = vi
+      .fn()
+      .mockResolvedValueOnce({ balance: 128.5, currency: 'CNY' })
+      .mockRejectedValueOnce(new Error('401 无效密钥'));
+
+    openProviderForm({
+      mount: document.body,
+      providerTypes: PROVIDER_TYPES,
+      existing: null,
+      onSave,
+      testConnection,
+    });
+    const modal = document.querySelector('.modal-overlay');
+    const $ = (name) => modal.querySelector(`[name="${name}"]`);
+    const btn = modal.querySelector('[data-role="test-btn"]');
+    const result = modal.querySelector('[data-role="test-result"]');
+
+    // 未填密钥先提示，不发起请求
+    btn.click();
+    await vi.waitFor(() => expect(result.hidden).toBe(false));
+    expect(result.textContent).toContain('请先填写 API Key');
+    expect(testConnection).not.toHaveBeenCalled();
+
+    // 填密钥 → 成功显示余额
+    $('apiKey').value = 'sk-ok';
+    btn.click();
+    await vi.waitFor(() => expect(result.textContent).toContain('连接成功'));
+    expect(result.textContent).toContain('128.5');
+    expect(testConnection).toHaveBeenCalledWith(expect.objectContaining({ type: 'deepseek', apiKey: 'sk-ok' }));
+
+    // 再点 → 失败显示错误消息
+    btn.click();
+    await vi.waitFor(() => expect(result.textContent).toContain('401 无效密钥'));
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('不支持自动查询的类型点击测试给出提示', async () => {
+    openProviderForm({ mount: document.body, providerTypes: PROVIDER_TYPES, existing: null, onSave: vi.fn() });
+    const modal = document.querySelector('.modal-overlay');
+    const typeSelect = modal.querySelector('[name="type"]');
+    typeSelect.value = 'custom';
+    typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    modal.querySelector('[data-role="test-btn"]').click();
+    await vi.waitFor(() => expect(modal.querySelector('[data-role="test-result"]').textContent).toContain('不支持自动查询'));
+  });
 });
 
 describe('迷你小窗口视图', () => {
