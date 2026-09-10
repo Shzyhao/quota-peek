@@ -28,7 +28,7 @@ function seedApp(providers, { view } = {}) {
   providers.forEach((p) => repo.saveProvider(p));
   const logger = createLogger(repo);
   const service = createQuotaService({ repo, logger });
-  window.location.hash = view ? `#/${view}` : '#/overview';
+  window.location.hash = view ? `#/${view}` : '#/home';
   const root = document.createElement('div');
   document.body.appendChild(root);
   const app = renderApp({ root, repo, logger, service });
@@ -57,7 +57,7 @@ const zhipu = (overrides = {}) =>
 
 beforeEach(() => {
   document.body.innerHTML = '';
-  window.location.hash = '#/overview';
+  window.location.hash = '#/home';
   document.documentElement.removeAttribute('data-theme');
   localStorage.clear();
 });
@@ -72,11 +72,11 @@ function navTo(root, view) {
 
 describe('应用壳与导航', () => {
   it('总览页渲染侧边栏、统计卡与供应商卡片，API Key 脱敏', () => {
-    const { root } = seedApp([deepseek()]);
+    const { root } = seedApp([deepseek()], { view: 'overview' });
 
-    // 侧边栏六个导航项（总览/对话/文件分析/供应商/查询日志/设置）
+    // 侧边栏七个导航项（首页/对话/文件分析/额度总览/供应商/查询日志/设置）
     const navs = root.querySelectorAll('[data-action="nav"]');
-    expect(navs.length).toBe(6);
+    expect(navs.length).toBe(7);
 
     // 统计卡
     for (const label of ['余额合计', '供应商', '需要关注', '最近刷新']) {
@@ -94,7 +94,7 @@ describe('应用壳与导航', () => {
   });
 
   it('导航切换：供应商（搜索/筛选）、日志、设置', () => {
-    const { root } = seedApp([deepseek()]);
+    const { root } = seedApp([deepseek()], { view: 'overview' });
 
     navTo(root, 'providers');
     expect(root.querySelector('[data-search]')).toBeTruthy();
@@ -114,7 +114,7 @@ describe('应用壳与导航', () => {
   });
 
   it('余额型供应商有剩余额度进度条（300 总额 / 210 剩余 = 70%）', () => {
-    const { root } = seedApp([deepseek()]);
+    const { root } = seedApp([deepseek()], { view: 'overview' });
     const fill = root.querySelector('.card .progress .fill');
     expect(fill).toBeTruthy();
     expect(fill.style.width).toBe('70%');
@@ -126,7 +126,7 @@ describe('搜索与筛选（供应商页）', () => {
     const { root } = seedApp([
       deepseek(),
       deepseek({ id: 'p2', name: 'OpenAI 团队号', type: 'custom', apiKey: '', note: '手动维护' }),
-    ]);
+    ], { view: 'overview' });
     navTo(root, 'providers');
     expect(root.querySelectorAll('.card').length).toBe(2);
 
@@ -146,7 +146,7 @@ describe('搜索与筛选（供应商页）', () => {
     const { root } = seedApp([
       deepseek(), // 正常
       deepseek({ id: 'p2', name: '低余额号', lastQuery: { time: 'x', status: 'ok', balance: 3, currency: 'CNY', error: null } }),
-    ]);
+    ], { view: 'overview' });
     navTo(root, 'providers');
 
     const select = root.querySelector('[data-filter-status]');
@@ -164,7 +164,7 @@ describe('一键刷新与日志（真实交互流）', () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => okBody });
     vi.stubGlobal('fetch', fetchImpl);
 
-    const { root, logger } = seedApp([deepseek()]);
+    const { root, logger } = seedApp([deepseek()], { view: 'overview' });
     root.querySelector('[data-action="refresh-all"]').click();
 
     await vi.waitFor(() => {
@@ -192,7 +192,7 @@ describe('一键刷新与日志（真实交互流）', () => {
   it('查询失败时卡片红色异常并展示错误原因', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }));
 
-    const { root } = seedApp([deepseek()]);
+    const { root } = seedApp([deepseek()], { view: 'overview' });
     root.querySelector('[data-action="refresh-all"]').click();
 
     await vi.waitFor(() => {
@@ -205,7 +205,7 @@ describe('一键刷新与日志（真实交互流）', () => {
   it('智谱 Coding Plan：用量指标 + 双进度条 + 套餐详情', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => zhipuOk }));
 
-    const { root } = seedApp([zhipu()]);
+    const { root } = seedApp([zhipu()], { view: 'overview' });
     root.querySelector('[data-action="refresh-all"]').click();
 
     await vi.waitFor(() => {
@@ -228,7 +228,7 @@ describe('一键刷新与日志（真实交互流）', () => {
   });
 
   it('不支持自动查询的供应商：标记展示且「刷新」禁用', () => {
-    const { root } = seedApp([deepseek({ type: 'custom', apiKey: '', name: '手动维护的供应商' })]);
+    const { root } = seedApp([deepseek({ type: 'custom', apiKey: '', name: '手动维护的供应商' })], { view: 'overview' });
 
     expect(root.innerHTML).toContain('不支持自动查询');
     const refreshBtn = root.querySelector('[data-action="refresh"]');
@@ -238,7 +238,7 @@ describe('一键刷新与日志（真实交互流）', () => {
 
 describe('危险操作走样式化确认弹窗', () => {
   it('删除供应商：确认后移除，取消则保留', async () => {
-    const { root, repo } = seedApp([deepseek()]);
+    const { root, repo } = seedApp([deepseek()], { view: 'overview' });
 
     root.querySelector('[data-action="delete"]').click();
     const overlay = document.querySelector('.confirm-overlay');
@@ -259,7 +259,7 @@ describe('危险操作走样式化确认弹窗', () => {
 
   it('清空日志：确认后清空', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => okBody }));
-    const { root, logger } = seedApp([deepseek()]);
+    const { root, logger } = seedApp([deepseek()], { view: 'overview' });
 
     root.querySelector('[data-action="refresh-all"]').click();
     await vi.waitFor(() => expect(logger.list()).toHaveLength(1));
@@ -275,7 +275,7 @@ describe('危险操作走样式化确认弹窗', () => {
   });
 
   it('清空全部数据：确认后回到空状态', async () => {
-    const { root, repo } = seedApp([deepseek()]);
+    const { root, repo } = seedApp([deepseek()], { view: 'overview' });
     navTo(root, 'settings');
 
     root.querySelector('[data-action="clear-all"]').click();
@@ -291,7 +291,7 @@ describe('危险操作走样式化确认弹窗', () => {
 
 describe('设置：主题与阈值', () => {
   it('切换深色主题：<html data-theme> 与持久化同步', () => {
-    const { root } = seedApp([deepseek()]);
+    const { root } = seedApp([deepseek()], { view: 'overview' });
     navTo(root, 'settings');
 
     const select = root.querySelector('[data-setting-theme]');
@@ -303,7 +303,7 @@ describe('设置：主题与阈值', () => {
   });
 
   it('顶栏快捷键循环切换主题 auto → light → dark', () => {
-    const { root } = seedApp([deepseek()]);
+    const { root } = seedApp([deepseek()], { view: 'overview' });
 
     root.querySelector('[data-action="theme-cycle"]').click();
     expect(localStorage.getItem('mqc.theme')).toBe('light');
@@ -313,7 +313,7 @@ describe('设置：主题与阈值', () => {
   });
 
   it('修改提醒阈值即时生效并持久化', () => {
-    const { root, repo } = seedApp([deepseek()]);
+    const { root, repo } = seedApp([deepseek()], { view: 'overview' });
     navTo(root, 'settings');
 
     const input = root.querySelector('[data-setting="lowBalanceThreshold"]');
@@ -326,7 +326,7 @@ describe('设置：主题与阈值', () => {
 
 describe('备份导入（UI 逻辑）', () => {
   it('导入合法备份：确认覆盖后数据生效', async () => {
-    const { root, repo, app } = seedApp([]);
+    const { root, repo, app } = seedApp([], { view: 'overview' });
 
     const backupText = JSON.stringify({
       app: 'model-quota-frontend',
@@ -352,7 +352,7 @@ describe('备份导入（UI 逻辑）', () => {
   });
 
   it('导入非法文件：提示错误且数据不变', async () => {
-    const { repo, app } = seedApp([deepseek()]);
+    const { repo, app } = seedApp([deepseek()], { view: 'overview' });
 
     const okP = app.importFromText('{broken json');
     // 错误提示弹窗点「知道了」
@@ -365,7 +365,7 @@ describe('备份导入（UI 逻辑）', () => {
 
 describe('添加/编辑表单', () => {
   it('通过顶栏「添加供应商」保存后卡片出现', () => {
-    const { root, repo } = seedApp([]);
+    const { root, repo } = seedApp([], { view: 'overview' });
     root.querySelector('[data-action="add"]').click();
 
     const modal = document.querySelector('.modal-overlay');
@@ -456,7 +456,7 @@ describe('添加/编辑表单', () => {
       apiKey: 'AKLT-demo-0001',
       apiSecret: 'sk-volc-demo-secret-0002',
     });
-    const { root } = seedApp([volc]);
+    const { root } = seedApp([volc], { view: 'overview' });
 
     expect(root.innerHTML).toContain('AKLT••••••0001');
     expect(root.innerHTML).toContain('sk-v••••••0002');
@@ -610,7 +610,7 @@ describe('低额度提醒（弹窗 / 系统通知 / 关闭）', () => {
 
   it('默认界面弹窗：刷新检测到告警弹窗，同一告警去重，恢复正常后重新计数', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
-    const { root } = seedApp([deepseek()]);
+    const { root } = seedApp([deepseek()], { view: 'overview' });
     root.querySelector('[data-action="refresh-all"]').click();
     await vi.waitFor(() => {
       const modal = document.querySelector('.confirm-modal');
@@ -726,7 +726,7 @@ describe('桌面悬浮球开关（顶栏按钮 + 设置页）', () => {
     // 广播「关闭」→ 开关取消；顶栏按钮（切回总览）不带 active
     await handlers['ball-state-changed']({ payload: false });
     expect(root.querySelector('[data-ball-toggle]').checked).toBe(false);
-    window.location.hash = '#/overview';
+    window.location.hash = '#/home';
     root.dispatchEvent(new Event('hashchange'));
     const btn = root.querySelector('[data-action="toggle-ball"]');
     expect(btn).toBeTruthy();

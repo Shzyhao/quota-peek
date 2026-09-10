@@ -14,7 +14,10 @@ import { escapeHtml, formatMoney, formatNumber, formatDateTime } from './format.
 const LOG_STATUS_LABELS = { ok: '成功', failed: '失败', unsupported: '不支持' };
 
 const VIEW_TITLES = {
-  overview: '总览',
+  home: '首页',
+  overview: '额度总览',
+  chat: '对话',
+  analysis: '文件分析',
   providers: '供应商',
   logs: '查询日志',
   settings: '设置',
@@ -190,6 +193,44 @@ function emptyState(text, cta = '') {
 }
 
 // —— 总览 ——
+// —— 首页（桌宠主导）：品牌区 + 对话快捷入口 + 三功能卡片 ——
+export function homeView(ctx) {
+  const { providers, settings } = ctx;
+  const alerts = providers.map((p) => evaluateProvider(p, settings));
+  const needAttention = alerts.filter((a) => a.level === 'error' || a.level === 'warn').length;
+  const withBalance = providers.filter((p) => p.lastQuery?.status === 'ok' && p.lastQuery?.balance != null);
+  const totalBalance = withBalance.reduce((sum, p) => sum + Number(p.lastQuery.balance), 0);
+
+  return `
+    <div class="home">
+      <div class="home-hero">
+        <span class="home-mascot" aria-hidden="true">(≧▽≦)</span>
+        <div class="home-hero-text">
+          <h1>桌看</h1>
+          <p>你的桌面看板娘 —— 常驻屏幕角落，能陪聊、能读文档，也帮你盯着各家大模型的额度。桌面上的 Live2D 小人就是她，点她互动、拖她挪位、把文件丢给她分析。</p>
+          <button class="btn primary" data-action="nav" data-view="chat">💬 和她聊聊</button>
+        </div>
+      </div>
+      <div class="home-cards">
+        <button class="home-card" data-action="nav" data-view="chat">
+          <span class="home-card-icon">💬</span>
+          <b>AI 对话</b>
+          <small>流式回复 · 自定义人设 · 桌宠气泡同步</small>
+        </button>
+        <button class="home-card" data-action="nav" data-view="analysis">
+          <span class="home-card-icon">📄</span>
+          <b>文件分析</b>
+          <small>拖入文档即分析 · md/pdf/xlsx/docx · 可保存报告</small>
+        </button>
+        <button class="home-card" data-action="nav" data-view="overview">
+          <span class="home-card-icon">📊</span>
+          <b>额度查询</b>
+          <small>${withBalance.length ? `余额合计 ${formatMoney(totalBalance, 'CNY')}` : '9 家自动查询'}${needAttention ? ` · <span class="home-card-alert">${needAttention} 项需关注</span>` : ' · 全部正常'}</small>
+        </button>
+      </div>
+    </div>`;
+}
+
 export function overviewView(ctx) {
   const { providers, settings, busy } = ctx;
   const enabled = providers.filter((p) => p.enabled !== false);
@@ -348,7 +389,7 @@ export function settingsView(ctx) {
 
       <section class="settings-card">
         <h3>关于</h3>
-        <p class="settings-hint">看额度（模型额度查询）· 纯前端本地工具 · 支持自动查询：DeepSeek / 智谱 / 火山方舟 / MiniMax / Kimi / 硅基流动 / StepFun / OpenRouter / Novita。<br>各供应商接口调研与安全说明见项目 README。</p>
+        <p class="settings-hint">桌看（原看额度）· 桌宠看板娘，额度查询为功能模块 · 支持自动查询：DeepSeek / 智谱 / 火山方舟 / MiniMax / Kimi / 硅基流动 / StepFun / OpenRouter / Novita。<br>各供应商接口调研与安全说明见项目 README。</p>
       </section>
     </div>`;
 }

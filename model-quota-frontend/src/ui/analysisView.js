@@ -16,7 +16,7 @@ export function mountAnalysisPage(el) {
   if (!isAnalysisAvailable()) {
     el.innerHTML = `
       <div class="empty-state">
-        <p>文件分析仅在桌面版（看额度.exe）中可用——文件解析与模型请求由桌面壳完成。</p>
+        <p>文件分析仅在桌面版（桌看.exe）中可用——文件解析与模型请求由桌面壳完成。</p>
       </div>`;
     return;
   }

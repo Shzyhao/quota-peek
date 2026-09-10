@@ -5,20 +5,22 @@ import { buildBackup, parseBackup, applyBackup } from '../core/backup.js';
 import { getStoredTheme, setStoredTheme, applyTheme, THEMES } from '../core/theme.js';
 import { openProviderForm } from './form.js';
 import { styledConfirm } from './confirm.js';
-import { viewTitle, providerCard, overviewView, providersView, logsView, settingsView } from './views.js';
+import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
 import { chatView, mountChatPage } from './chatView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
 
 const NAV_ITEMS = [
-  { view: 'overview', label: '总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
+  { view: 'home', label: '首页', icon: 'M4 11l8-7 8 7M6 10v9h12v-9' },
   { view: 'chat', label: '对话', icon: 'M4 4h16v12H8l-4 4z' },
   { view: 'analysis', label: '文件分析', icon: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13h6M9 17h4' },
+  { view: 'overview', label: '额度总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
   { view: 'providers', label: '供应商', icon: 'M4 6h16M4 12h16M4 18h10' },
   { view: 'logs', label: '查询日志', icon: 'M6 4h12v16l-6-3-6 3zM9 9h6' },
   { view: 'settings', label: '设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19' },
 ];
 
 const VIEW_RENDERERS = {
+  home: homeView,
   overview: overviewView,
   chat: chatView,
   analysis: analysisView,
@@ -29,7 +31,7 @@ const VIEW_RENDERERS = {
 
 function currentView() {
   const hash = (globalThis.location?.hash || '').replace(/^#\/?/, '');
-  return VIEW_RENDERERS[hash] ? hash : 'overview';
+  return VIEW_RENDERERS[hash] ? hash : 'home';
 }
 
 export function renderApp({ root, repo, logger, service }) {
@@ -163,7 +165,7 @@ export function renderApp({ root, repo, logger, service }) {
       const d = new Date();
       const pad = (x) => String(x).padStart(2, '0');
       a.href = url;
-      a.download = `看额度备份-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.json`;
+      a.download = `桌看备份-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}.json`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -313,7 +315,7 @@ export function renderApp({ root, repo, logger, service }) {
         <aside class="sidebar">
           <div class="brand">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 17l5-6 4 4 4-7 5 9"/></svg>
-            <span>看额度</span>
+            <span>桌看</span>
           </div>
           <nav class="nav">
             ${NAV_ITEMS.map(

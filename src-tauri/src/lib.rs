@@ -1,4 +1,4 @@
-//! 看额度桌面壳：托盘常驻 + 关窗驻留 + 桌面悬浮（Live2D 桌宠 / 经典悬浮球，可切换）+ 迷你速览窗。
+//! 桌看桌面壳：托盘常驻 + 关窗驻留 + 桌面悬浮（Live2D 桌宠 / 经典悬浮球，可切换）+ 迷你速览窗。
 //! 前端逻辑全部复用 model-quota-frontend，本 crate 只做窗口与托盘的胶水。
 //!
 //! 已定案的限制（勿重排查）：
@@ -356,7 +356,7 @@ pub fn run() {
 
             let tray = TrayIconBuilder::with_id("quota-tray")
                 .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("看额度 · 左键显示/隐藏主窗口，关闭窗口将驻留托盘")
+                .tooltip("桌看 · 左键显示/隐藏主窗口，关闭窗口将驻留托盘")
                 .menu(&build_tray_menu(app.app_handle())?)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {

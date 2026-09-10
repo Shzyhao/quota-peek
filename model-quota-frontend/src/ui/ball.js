@@ -40,10 +40,10 @@ export function renderBall({ root, repo }) {
 
     // 原生 tooltip：告警时逐行列出原因，正常时说明用法
     const tip = alerts.length
-      ? `看额度 · ${alerts.length} 项需关注（单击展开速览，拖动移动位置）\n${alerts
+      ? `桌看 · ${alerts.length} 项需关注（单击展开速览，拖动移动位置）\n${alerts
           .map((a) => `· ${a.name}【${STATUS_LABELS[a.level]}】${a.reasons.join('；')}`)
           .join('\n')}`
-      : '看额度 · 单击展开速览，拖动移动位置';
+      : '桌看 · 单击展开速览，拖动移动位置';
 
     root.innerHTML = `
       <div class="ball level-${level}" title="${escapeHtml(tip)}">

@@ -25,7 +25,7 @@ export function mountChatPage(el, { repo }) {
   if (!desktop) {
     el.innerHTML = `
       <div class="empty-state">
-        <p>AI 对话仅在桌面版（看额度.exe）中可用——密钥存储与模型请求由桌面壳完成。</p>
+        <p>AI 对话仅在桌面版（桌看.exe）中可用——密钥存储与模型请求由桌面壳完成。</p>
         <p>网页版仍可使用额度查询等全部本地功能。</p>
       </div>`;
     return;
