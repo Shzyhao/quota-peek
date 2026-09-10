@@ -22,9 +22,9 @@ const MINI_W: f64 = 300.0;
 const MINI_H: f64 = 430.0;
 /// 经典悬浮球窗口尺寸（球体 60px + 辉光余量，前端 .ball 呈现圆形）
 const BALL_SIZE: f64 = 76.0;
-/// 桌宠窗口逻辑尺寸（Live2D 人物立绘，竖长窗）
-const PET_W: f64 = 300.0;
-const PET_H: f64 = 460.0;
+/// 桌宠窗口逻辑尺寸（Q 版半身形象，紧凑小窗）
+const PET_W: f64 = 240.0;
+const PET_H: f64 = 300.0;
 
 fn default_form() -> String {
     "pet".into()
