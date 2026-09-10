@@ -6,9 +6,13 @@ import { getStoredTheme, setStoredTheme, applyTheme, THEMES } from '../core/them
 import { openProviderForm } from './form.js';
 import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, overviewView, providersView, logsView, settingsView } from './views.js';
+import { chatView, mountChatPage } from './chatView.js';
+import { analysisView, mountAnalysisPage } from './analysisView.js';
 
 const NAV_ITEMS = [
   { view: 'overview', label: '总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
+  { view: 'chat', label: '对话', icon: 'M4 4h16v12H8l-4 4z' },
+  { view: 'analysis', label: '文件分析', icon: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13h6M9 17h4' },
   { view: 'providers', label: '供应商', icon: 'M4 6h16M4 12h16M4 18h10' },
   { view: 'logs', label: '查询日志', icon: 'M6 4h12v16l-6-3-6 3zM9 9h6' },
   { view: 'settings', label: '设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19' },
@@ -16,6 +20,8 @@ const NAV_ITEMS = [
 
 const VIEW_RENDERERS = {
   overview: overviewView,
+  chat: chatView,
+  analysis: analysisView,
   providers: providersView,
   logs: logsView,
   settings: settingsView,
@@ -35,6 +41,8 @@ export function renderApp({ root, repo, logger, service }) {
   const alertedIds = new Set();
   // 桌面悬浮球开关状态（仅桌面壳 __TAURI__ 环境使用；由后端 ball-state-changed 事件驱动）
   let ballOn = false;
+  // 悬浮形态：pet（Live2D 桌宠）/ ball（经典悬浮球），由后端 ball-form-changed 事件驱动
+  let ballForm = 'pet';
   const tauriEvents = globalThis.__TAURI__?.event;
 
   // ——— 低额度提醒（'popup' 界面弹窗 / 'notify' 桌面系统通知 / '' 关闭）———
@@ -263,6 +271,8 @@ export function renderApp({ root, repo, logger, service }) {
     if (btn) btn.classList.toggle('active', ballOn);
     const toggle = root.querySelector('[data-ball-toggle]');
     if (toggle) toggle.checked = ballOn;
+    const formSelect = root.querySelector('[data-ball-form]');
+    if (formSelect) formSelect.value = ballForm === 'ball' ? 'ball' : 'pet';
   }
 
   // ——— 渲染 ———
@@ -277,9 +287,18 @@ export function renderApp({ root, repo, logger, service }) {
       statusFilter: uiState.statusFilter,
       isDesktop: !!tauriEvents,
       ballVisible: ballOn,
+      ballForm,
     };
     const content = root.querySelector('[data-role="view-content"]');
     if (content) content.innerHTML = VIEW_RENDERERS[view](ctx);
+    // 对话/文件分析页是自挂载组件（自带事件与流式状态），模板渲染后初始化
+    if (view === 'chat') {
+      const chatRoot = content.querySelector('[data-role="chat-root"]');
+      if (chatRoot) mountChatPage(chatRoot, { repo });
+    } else if (view === 'analysis') {
+      const analysisRoot = content.querySelector('[data-role="analysis-root"]');
+      if (analysisRoot) mountAnalysisPage(analysisRoot);
+    }
     const navItems = root.querySelectorAll('[data-action="nav"]');
     navItems.forEach((el) => el.classList.toggle('active', el.dataset.view === view));
     const title = root.querySelector('[data-role="view-title"]');
@@ -372,6 +391,11 @@ export function renderApp({ root, repo, logger, service }) {
       tauriEvents?.emit?.('set-ball', ballToggle.checked);
       return;
     }
+    const ballFormSelect = e.target.closest('[data-ball-form]');
+    if (ballFormSelect) {
+      tauriEvents?.emit?.('set-ball-form', ballFormSelect.value);
+      return;
+    }
     const themeSelect = e.target.closest('[data-setting-theme]');
     if (themeSelect) {
       setStoredTheme(themeSelect.value);
@@ -449,6 +473,12 @@ export function renderApp({ root, repo, logger, service }) {
       syncBallUi();
     });
     tauriEvents.emit('ball-state-request');
+    // 悬浮形态（桌宠/经典球）同步
+    void tauriEvents.listen('ball-form-changed', (e) => {
+      ballForm = e.payload === 'ball' ? 'ball' : 'pet';
+      syncBallUi();
+    });
+    tauriEvents.emit('ball-form-request');
   }
 
   scheduleAutoRefresh();

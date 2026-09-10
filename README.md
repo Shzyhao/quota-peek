@@ -1,13 +1,16 @@
 # 看额度 · QuotaPeek
 
-一个轻量级本地小工具：查询并记录**多家大模型供应商**的套餐余额、剩余额度和到期时间，托盘常驻，随手看一眼心里有数。
+一个轻量级本地小工具：**Live2D 桌面宠物 + AI 对话 + 文件分析 + 多家大模型额度查询**，托盘常驻，随手看一眼心里有数。
 
 - 中文产品名：**看额度**（原名「模型额度查询」）
 - 技术形态：纯前端（Vite + 原生 JS，零 UI 框架）+ **Tauri 2 桌面壳**（Windows 托盘常驻），前端两种形态共用同一套代码
-- 数据全部保存在本机（浏览器 localStorage / WebView2 本地存储），无任何服务端
+- 数据全部保存在本机（浏览器 localStorage / WebView2 本地存储 / Windows 凭据管理器），无任何服务端
 
 ## 功能
 
+- **Live2D 桌宠**：透明置顶无边框窗常驻桌面（官方示例模型 Haru，Cubism 4），点击头部换表情 / 身体换动作，拖动移位并记忆位置；设置页与托盘菜单可在「桌宠 / 经典悬浮球」间切换
+- **AI 对话**：多套 OpenAI 兼容模型配置（DeepSeek / Kimi / GLM 等），API Key 存 Windows 凭据管理器；主窗「对话」页完整会话，桌宠窗底部输入条直接聊（流式气泡回复）；发起对话自动附上额度数据，可直接问「我还剩多少额度」；人设（system 提示词）可自定义
+- **文件分析**：主窗「文件分析」页选文件 / 拖拽，或直接把文件拖到桌宠身上——txt / md / pdf / xlsx / docx / csv / json / 代码文件解析后流式输出 Markdown 分析，可保存 `.ai.md` 到源文件旁，自动记录分析历史
 - **供应商管理**：添加 / 编辑 / 删除，支持 API Key、Base URL、套餐额度、到期时间、备注、启停
 - **自动查询 9 家**（官方或官方工具背书的接口，浏览器直连）：DeepSeek、智谱 GLM Coding Plan、火山方舟 Coding Plan（IAM SigV4 签名）、MiniMax Coding Plan、Kimi/Moonshot、硅基流动、StepFun、OpenRouter、Novita
 - **手动维护**：Anthropic / OpenAI / Gemini / Qwen 等无公开 API Key 式接口的供应商，标记「不支持自动查询」并手动记录额度
@@ -26,7 +29,7 @@
 # 网页版（开发）
 cd model-quota-frontend
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # http://localhost:5180（5173 常被其他项目 dev server 占用，已固定 5180 + strictPort）
 
 # 测试（162 个用例，Vitest + jsdom）
 npm test

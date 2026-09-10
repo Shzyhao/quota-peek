@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "看额度",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "identifier": "com.modelquota.desktop",
   "build": {
     "beforeDevCommand": "npm --prefix model-quota-frontend run dev",
-    "devUrl": "http://localhost:5173",
+    "devUrl": "http://localhost:5180",
     "beforeBuildCommand": "npm --prefix model-quota-frontend run build",
     "frontendDist": "../model-quota-frontend/dist"
   },

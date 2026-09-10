@@ -1,4 +1,4 @@
-//! 看额度桌面壳：托盘常驻 + 关窗驻留 + 桌面悬浮球（透明圆形科技风）+ 迷你速览窗。
+//! 看额度桌面壳：托盘常驻 + 关窗驻留 + 桌面悬浮（Live2D 桌宠 / 经典悬浮球，可切换）+ 迷你速览窗。
 //! 前端逻辑全部复用 model-quota-frontend，本 crate 只做窗口与托盘的胶水。
 //!
 //! 已定案的限制（勿重排查）：
@@ -15,13 +15,23 @@ use tauri_plugin_notification::NotificationExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+mod commands;
+
 /// 迷你窗逻辑尺寸（与 open_mini / 前端样式保持一致）
 const MINI_W: f64 = 300.0;
 const MINI_H: f64 = 430.0;
-/// 悬浮球窗口尺寸（球体 60px + 辉光余量，前端 .ball 呈现圆形）
+/// 经典悬浮球窗口尺寸（球体 60px + 辉光余量，前端 .ball 呈现圆形）
 const BALL_SIZE: f64 = 76.0;
+/// 桌宠窗口逻辑尺寸（Live2D 人物立绘，竖长窗）
+const PET_W: f64 = 300.0;
+const PET_H: f64 = 460.0;
 
-/// 悬浮球偏好：是否显示 + 物理坐标位置，持久化到配置目录，重启保留
+fn default_form() -> String {
+    "pet".into()
+}
+
+/// 悬浮形态偏好：是否显示 + 物理坐标位置 + 形态（pet 桌宠 / ball 经典悬浮球），
+/// 持久化到配置目录，重启保留
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 struct BallPrefs {
     #[serde(default)]
@@ -30,6 +40,24 @@ struct BallPrefs {
     x: Option<i32>,
     #[serde(default)]
     y: Option<i32>,
+    /// 悬浮形态；旧配置无此字段时默认升级为桌宠（产品定案：桌宠取代悬浮球）
+    #[serde(default = "default_form")]
+    form: String,
+}
+
+impl BallPrefs {
+    fn is_pet(&self) -> bool {
+        self.form != "ball"
+    }
+
+    /// 当前形态的窗口配置：(宽, 高, 前端路由, 标题)
+    fn window_conf(&self) -> (f64, f64, &'static str, &'static str) {
+        if self.is_pet() {
+            (PET_W, PET_H, "index.html#pet", "桌宠")
+        } else {
+            (BALL_SIZE, BALL_SIZE, "index.html#ball", "额度悬浮球")
+        }
+    }
 }
 
 /// 前端 show-notify 事件载荷：系统通知标题与正文
@@ -118,45 +146,65 @@ fn hide_mini_flyout(app: &AppHandle) {
     }
 }
 
-/// 托盘菜单（悬浮球开关项的标签随当前状态变化，切换后整体重建）
+/// 托盘菜单（悬浮形态开关与切换项的标签随当前状态变化，切换后整体重建）
 fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let ball_on = shell_state(app)
-        .map(|st| st.prefs.lock().unwrap().visible)
-        .unwrap_or(false);
+    let prefs = shell_state(app)
+        .map(|st| st.prefs.lock().unwrap().clone())
+        .unwrap_or_default();
+    let ball_on = app.webview_windows().get("ball").is_some();
+    let thing = if prefs.is_pet() { "桌宠" } else { "悬浮球" };
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
     let mini = MenuItem::with_id(app, "mini", "迷你小窗", true, None::<&str>)?;
     let ball = MenuItem::with_id(
         app,
         "ball",
-        if ball_on { "关闭悬浮球" } else { "打开悬浮球" },
+        if ball_on { format!("关闭{thing}") } else { format!("打开{thing}") },
+        true,
+        None::<&str>,
+    )?;
+    let form = MenuItem::with_id(
+        app,
+        "form",
+        if prefs.is_pet() { "切换为经典悬浮球" } else { "切换为桌宠" },
         true,
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &mini, &ball, &quit])
+    Menu::with_items(app, &[&show, &mini, &ball, &form, &quit])
 }
 
-/// 创建悬浮球窗口（位置：已保存的物理坐标，否则主显示器右侧偏上）。
-/// transparent 透明窗口：球体外的画布真正透明，消除不透明方案的深色方块底。
+/// 创建悬浮窗（桌宠或经典球，位置：已保存的物理坐标，否则主显示器右侧偏上）。
+/// transparent 透明窗口：人物/球体外的画布真正透明，消除不透明方案的深色方块底。
 fn create_ball_window(app: &AppHandle) {
     let st_prefs = shell_state(app).map(|st| st.prefs.lock().unwrap().clone());
+    let (w, h, url, title) = st_prefs
+        .as_ref()
+        .map(|p| p.window_conf())
+        .unwrap_or((PET_W, PET_H, "index.html#pet", "桌宠"));
+    let scale = scale_factor(app);
+    let (screen_w, screen_h) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| (m.size().width as f64, m.size().height as f64))
+        .unwrap_or((1920.0, 1080.0));
+    // 物理像素的窗口尺寸（偏好坐标是物理坐标系）
+    let (pw, ph) = (w * scale, h * scale);
     let (x, y) = match st_prefs.as_ref().and_then(|p| p.x.zip(p.y)) {
-        Some((x, y)) => (x as f64, y as f64),
+        // 旧悬浮球（76px）时代的坐标可能把更大的桌宠窗（300×460）挤出屏幕，
+        // 统一钳制到屏幕内，保证完整可见
+        Some((x, y)) => (
+            (x as f64).clamp(0.0, (screen_w - pw).max(0.0)),
+            (y as f64).clamp(0.0, (screen_h - ph).max(0.0)),
+        ),
         None => {
-            let scale = scale_factor(app);
-            let width = app
-                .primary_monitor()
-                .ok()
-                .flatten()
-                .map(|m| m.size().width as f64)
-                .unwrap_or(1920.0);
             // 默认位置（主显示器右侧偏上）按物理坐标计算
-            (width - BALL_SIZE * scale - 24.0 * scale, 200.0 * scale)
+            (screen_w - pw - 24.0 * scale, 200.0 * scale)
         }
     };
-    if let Ok(win) = WebviewWindowBuilder::new(app, "ball", WebviewUrl::App("index.html#ball".into()))
-        .title("额度悬浮球")
-        .inner_size(BALL_SIZE, BALL_SIZE)
+    if let Ok(win) = WebviewWindowBuilder::new(app, "ball", WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(w, h)
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -172,10 +220,43 @@ fn create_ball_window(app: &AppHandle) {
     }
 }
 
-/// 广播悬浮球当前状态（开窗即视为开启），主界面按钮与设置页开关据此同步
+/// 广播悬浮窗当前状态（开窗即视为开启），主界面按钮与设置页开关据此同步
 fn broadcast_ball_state(app: &AppHandle) {
     let visible = app.webview_windows().get("ball").is_some();
     let _ = app.emit("ball-state-changed", visible);
+}
+
+/// 广播当前悬浮形态（pet/ball），设置页形态选择据此同步
+fn broadcast_ball_form(app: &AppHandle) {
+    let form = shell_state(app)
+        .map(|st| st.prefs.lock().unwrap().form.clone())
+        .unwrap_or_else(default_form);
+    let _ = app.emit("ball-form-changed", form);
+}
+
+/// 切换悬浮形态（pet ↔ ball）：持久化偏好；若悬浮窗开着则按新形态重建，
+/// 随后重建托盘菜单刷新标签、广播形态变化
+fn set_ball_form(app: &AppHandle, form: &str) {
+    let Some(st) = shell_state(app) else { return };
+    let form = if form == "ball" { "ball".to_string() } else { default_form() };
+    let was_open = app.webview_windows().get("ball").is_some();
+    {
+        let mut prefs = st.prefs.lock().unwrap();
+        prefs.form = form;
+        save_prefs(app, &prefs);
+    }
+    if was_open {
+        if let Some(w) = app.webview_windows().get("ball") {
+            let _ = w.destroy();
+        }
+        create_ball_window(app);
+    }
+    if let Some(tray) = app.tray_by_id("quota-tray") {
+        if let Ok(menu) = build_tray_menu(app) {
+            let _ = tray.set_menu(Some(menu));
+        }
+    }
+    broadcast_ball_form(app);
 }
 
 /// 开关悬浮球：创建/销毁窗口并持久化偏好，随后重建托盘菜单刷新标签、广播状态
@@ -245,6 +326,24 @@ pub fn run() {
         }))
         // 系统通知（低额度提醒走 Windows 原生 Toast，由 Rust 端发送）
         .plugin(tauri_plugin_notification::init())
+        // 原生文件选择对话框（文件分析模块选文件，返回绝对路径）
+        .plugin(tauri_plugin_dialog::init())
+        // 桌宠 AI 对话 + 文件分析命令（流式 Channel + 凭据管理器密钥 + 连接测试 + 轻析管线）
+        .invoke_handler(tauri::generate_handler![
+            commands::chat_get_config,
+            commands::chat_save_config,
+            commands::chat_set_key,
+            commands::chat_has_key,
+            commands::chat_delete_key,
+            commands::chat_test_connection,
+            commands::chat_send,
+            commands::chat_cancel,
+            commands::analyze_files,
+            commands::analyze_cancel,
+            commands::analyze_get_history,
+            commands::analyze_delete_history,
+            commands::analyze_clear_history
+        ])
         .setup(|app| {
             let prefs = load_prefs(app.app_handle());
             let start_ball = prefs.visible;
@@ -252,6 +351,8 @@ pub fn run() {
                 prefs: Mutex::new(prefs),
                 mini_flyout: Mutex::new(false),
             });
+            // 桌宠 AI 对话状态（配置 + 凭据 + 流式取消标志）
+            app.manage(commands::ChatState::new(app.app_handle()));
 
             let tray = TrayIconBuilder::with_id("quota-tray")
                 .icon(app.default_window_icon().unwrap().clone())
@@ -262,6 +363,12 @@ pub fn run() {
                     "show" => show_main(app),
                     "mini" => open_mini(app),
                     "ball" => toggle_ball(app),
+                    "form" => {
+                        let cur_is_pet = shell_state(app)
+                            .map(|st| st.prefs.lock().unwrap().is_pet())
+                            .unwrap_or(true);
+                        set_ball_form(app, if cur_is_pet { "ball" } else { "pet" });
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -334,6 +441,19 @@ pub fn run() {
             let app_for_query = app.app_handle().clone();
             app.listen("ball-state-request", move |_| {
                 broadcast_ball_state(&app_for_query);
+            });
+
+            // 前端事件：设置页形态选择 → 切换桌宠/经典悬浮球（payload: "pet"/"ball"）
+            let app_for_form = app.app_handle().clone();
+            app.listen("set-ball-form", move |event| {
+                let form = serde_json::from_str::<String>(event.payload()).unwrap_or_default();
+                set_ball_form(&app_for_form, &form);
+            });
+
+            // 前端事件：主界面启动时查询当前悬浮形态
+            let app_for_form_query = app.app_handle().clone();
+            app.listen("ball-form-request", move |_| {
+                broadcast_ball_form(&app_for_form_query);
             });
 
             // 前端事件：低额度系统通知，由 Rust 端发原生 Toast

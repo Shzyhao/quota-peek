@@ -291,7 +291,7 @@ export function logsView(ctx) {
 
 // —— 设置 ——
 export function settingsView(ctx) {
-  const { settings, isDesktop, ballVisible } = ctx;
+  const { settings, isDesktop, ballVisible, ballForm } = ctx;
   const theme = getStoredTheme();
   return `
     <div class="settings-layout">
@@ -326,7 +326,13 @@ export function settingsView(ctx) {
         </div>
         <p class="settings-hint">当前生效：${THEME_LABELS[theme]}；深色模式同样作用于迷你小窗口。</p>
         ${isDesktop ? `
-        <label class="setting-toggle"><input data-ball-toggle type="checkbox" ${ballVisible ? 'checked' : ''}>桌面悬浮球 —— 置顶圆形小窗常驻桌面（蓝=正常 / 琥珀=低值提醒 / 红=异常），单击展开速览、拖动移动位置；也可从顶栏或托盘菜单开关</label>` : ''}
+        <label>桌面悬浮形态
+          <select data-ball-form>
+            <option value="pet" ${ballForm !== 'ball' ? 'selected' : ''}>桌宠人物（Live2D）</option>
+            <option value="ball" ${ballForm === 'ball' ? 'selected' : ''}>经典悬浮球</option>
+          </select>
+        </label>
+        <label class="setting-toggle"><input data-ball-toggle type="checkbox" ${ballVisible ? 'checked' : ''}>启用桌面悬浮 —— 桌宠形态：置顶 Live2D 人物（点击头部换表情 / 身体换动作，拖动移动位置）；经典悬浮球：置顶圆形小窗（蓝=正常 / 琥珀=低值提醒 / 红=异常），单击展开速览；也可从顶栏或托盘菜单开关</label>` : ''}
       </section>
 
       <section class="settings-card">

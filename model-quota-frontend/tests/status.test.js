@@ -94,7 +94,9 @@ describe('evaluateProvider', () => {
   });
 
   it('7 天内到期 → warn', () => {
-    const r = evaluateProvider(config({ expiryDate: '2026-09-05', lastQuery: okQuery(50) }), { ...settings, expiryWarningDays: 7 });
+    // 相对当前日期动态生成（写死日期会让测试随时间过期）
+    const soon = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+    const r = evaluateProvider(config({ expiryDate: soon, lastQuery: okQuery(50) }), { ...settings, expiryWarningDays: 7 });
     expect(r.level).toBe('warn');
     expect(r.reasons.join()).toContain('天后到期');
   });

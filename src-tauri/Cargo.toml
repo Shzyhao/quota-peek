@@ -1,6 +1,6 @@
 [package]
 name = "model-quota-app"
-version = "0.3.0"
+version = "0.4.0"
 description = "看额度 - 托盘常驻的大模型额度查询小工具"
 authors = ["model-quota"]
 edition = "2021"
@@ -16,8 +16,17 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 轻析（liteai-analyzer）库层：OpenAI 兼容流式客户端 / 配置与密钥 / 文件解析 / 分析管线 / 导出。
+# 五个 crate 均零 tauri 依赖，作为桌宠 AI 对话与文件分析模块的底层复用。
+liteai-model = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
+liteai-config = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
+liteai-core = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
+liteai-parsers = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
+liteai-output = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [profile.release]
 opt-level = "s"

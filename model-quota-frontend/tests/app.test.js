@@ -74,9 +74,9 @@ describe('应用壳与导航', () => {
   it('总览页渲染侧边栏、统计卡与供应商卡片，API Key 脱敏', () => {
     const { root } = seedApp([deepseek()]);
 
-    // 侧边栏四个导航项
+    // 侧边栏六个导航项（总览/对话/文件分析/供应商/查询日志/设置）
     const navs = root.querySelectorAll('[data-action="nav"]');
-    expect(navs.length).toBe(4);
+    expect(navs.length).toBe(6);
 
     // 统计卡
     for (const label of ['余额合计', '供应商', '需要关注', '最近刷新']) {

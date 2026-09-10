@@ -1,0 +1,102 @@
+import { describe, it, expect } from 'vitest';
+import { loadHistory, saveHistory, clearHistory, buildQuotaContext, buildOutgoingMessages } from '../src/core/chat.js';
+
+// 内存版 storage 桩（不依赖 jsdom localStorage 状态残留）
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+  };
+}
+
+describe('会话存储', () => {
+  it('空存储返回空数组', () => {
+    expect(loadHistory(memoryStorage())).toEqual([]);
+  });
+
+  it('损坏 JSON 返回空数组而不抛错', () => {
+    const s = memoryStorage();
+    s.setItem('mqc.chat.messages', '{oops');
+    expect(loadHistory(s)).toEqual([]);
+  });
+
+  it('保存超过上限只留最近 100 条', () => {
+    const s = memoryStorage();
+    const msgs = Array.from({ length: 130 }, (_, i) => ({ role: 'user', content: `m${i}` }));
+    const saved = saveHistory(msgs, s);
+    expect(saved).toHaveLength(100);
+    expect(saved[0].content).toBe('m30');
+    expect(loadHistory(s)).toHaveLength(100);
+  });
+
+  it('clearHistory 清空', () => {
+    const s = memoryStorage();
+    saveHistory([{ role: 'user', content: 'hi' }], s);
+    clearHistory(s);
+    expect(loadHistory(s)).toEqual([]);
+  });
+});
+
+describe('额度上下文注入', () => {
+  it('无供应商返回 null', () => {
+    expect(buildQuotaContext([])).toBeNull();
+    expect(buildQuotaContext(null)).toBeNull();
+  });
+
+  it('正常供应商生成含余额的 system 消息', () => {
+    const ctx = buildQuotaContext([
+      { name: 'DeepSeek', type: 'deepseek', lastQuery: { status: 'ok', balance: 42.5, currency: 'CNY' } },
+    ]);
+    expect(ctx.role).toBe('system');
+    expect(ctx.content).toContain('DeepSeek');
+    expect(ctx.content).toContain('42.5');
+  });
+
+  it('查询失败与未查询供应商也如实说明', () => {
+    const ctx = buildQuotaContext([
+      { name: 'A', type: 'x', lastQuery: { status: 'failed' } },
+      { name: 'B', type: 'y', lastQuery: null },
+    ]);
+    expect(ctx.content).toContain('查询失败');
+    expect(ctx.content).toContain('未查询');
+  });
+});
+
+describe('发往模型的消息组装', () => {
+  it('注入额度上下文在历史之前', () => {
+    const history = [
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'q2' },
+    ];
+    const ctx = { role: 'system', content: 'quota' };
+    const out = buildOutgoingMessages(history, ctx);
+    expect(out[0]).toEqual(ctx);
+    expect(out).toHaveLength(4);
+    expect(out[1].content).toBe('q1');
+  });
+
+  it('历史截断时丢弃开头的孤立 assistant 消息', () => {
+    // 构造 12*2+1 条，截断后开头是 assistant
+    const history = [];
+    for (let i = 0; i < 12; i++) {
+      history.push({ role: 'user', content: `q${i}` });
+      history.push({ role: 'assistant', content: `a${i}` });
+    }
+    history.push({ role: 'assistant', content: 'extra' });
+    const out = buildOutgoingMessages(history, null, 10);
+    expect(out[0].role).toBe('user');
+    expect(out.every((m) => m.role !== 'system')).toBe(true);
+  });
+
+  it('无上下文且历史开头是 user 时不丢消息', () => {
+    const history = [
+      { role: 'user', content: 'q1' },
+      { role: 'assistant', content: 'a1' },
+    ];
+    const out = buildOutgoingMessages(history, null);
+    expect(out).toHaveLength(2);
+  });
+});

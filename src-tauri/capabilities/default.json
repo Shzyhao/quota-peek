@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口/迷你小窗/悬浮球的基础能力：核心权限 + 事件收发（悬浮球交互）+ 迷你窗自绘标题栏（隐藏/拖动）",
+  "description": "主窗口/迷你小窗/悬浮窗的基础能力：核心权限 + 事件收发（悬浮球交互）+ 迷你窗自绘标题栏（隐藏/拖动）+ 文件选择对话框（文件分析）",
   "windows": ["main", "mini", "ball"],
   "permissions": [
     "core:default",
     "core:event:default",
     "core:window:allow-start-dragging",
-    "core:window:allow-hide"
+    "core:window:allow-hide",
+    "dialog:default"
   ]
 }

@@ -27,3 +27,6 @@ npm-debug.log*
 .DS_Store
 *.suo
 *.sw?
+
+# 验证截图（开发过程产物，不入库）
+shots/
