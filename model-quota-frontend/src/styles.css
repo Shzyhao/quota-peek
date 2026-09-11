@@ -3,6 +3,12 @@
    tokens（浅/深双主题）→ 应用壳 → 组件 → 迷你窗 → 响应式
    ============================================================ */
 
+/* hidden 属性优先于任何 display 规则（组件样式常设 flex/grid，
+   会覆盖 UA 的 display:none，导致 hidden 失效） */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   /* 色板 · 浅色 */
   --bg: #f4f6f9;
@@ -1640,6 +1646,21 @@ body {
 
 .chat-profile-form h4 { grid-column: 1 / -1; margin: 0; }
 
+.chat-profile-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.chat-profile-form input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 .chat-form-actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 
 .chat-persona-label {
@@ -1844,6 +1865,138 @@ html.pet-mode #app {
 }
 
 .pet-input-bar button:hover { background: var(--primary-hover); }
+
+/* 桌宠功能气泡菜单：点击桌宠弹出，功能区入口 + 换装皮肤网格 */
+.pet-menu {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 52px;
+  max-height: 70%;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(30, 36, 48, 0.92);
+  color: #f1f5fb;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  animation: pet-bubble-in 0.18s var(--ease);
+}
+
+.pet-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 6px;
+  font-size: 12px;
+  color: rgba(241, 245, 251, 0.75);
+}
+
+.pet-menu-head b { font-size: 13px; color: #f1f5fb; }
+
+.pet-menu-head button {
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  color: #f1f5fb;
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pet-menu > button,
+.pet-menu [data-skin] {
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f5fb;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
+}
+
+.pet-menu > button:hover,
+.pet-menu [data-skin]:hover { background: rgba(120, 160, 255, 0.35); }
+
+.pet-skin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.pet-menu [data-skin] {
+  text-align: center;
+  padding: 7px 4px;
+  font-size: 12px;
+}
+
+.pet-menu [data-skin].cur {
+  background: rgba(58, 109, 240, 0.55);
+  outline: 1px solid rgba(140, 175, 255, 0.8);
+}
+
+/* ============ 功能弹窗（#panel-chat / #panel-analysis，桌宠旁的独立小窗） ============ */
+html.panel-mode,
+html.panel-mode body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.panel-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.panel-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13px;
+  user-select: none;
+}
+
+.panel-head b { cursor: default; }
+
+.panel-close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.panel-close:hover { background: var(--error-soft); color: var(--error); }
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+}
 
 /* ============ 桌面悬浮球（#ball，无边框置顶圆形小窗） ============ */
 /* 桌面常驻球固定深空配色（不随应用主题），状态色驱动辉光：

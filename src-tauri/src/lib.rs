@@ -291,6 +291,72 @@ fn set_ball(app: &AppHandle, visible: bool) {
     }
 }
 
+/// 功能弹窗定义：(窗口 label, 路由, 逻辑宽, 逻辑高, 标题)
+fn panel_conf(panel: &str) -> Option<(&'static str, &'static str, f64, f64, &'static str)> {
+    match panel {
+        "chat" => Some(("panel-chat", "index.html#panel-chat", 380.0, 560.0, "桌看 · 对话")),
+        "analysis" => Some(("panel-analysis", "index.html#panel-analysis", 480.0, 560.0, "桌看 · 文件分析")),
+        _ => None,
+    }
+}
+
+/// 计算功能弹窗锚定桌宠旁的物理坐标：优先右侧，放不下换左侧，整体钳制屏幕内
+fn panel_anchor(app: &AppHandle, w: f64, h: f64) -> Option<(f64, f64)> {
+    let windows = app.webview_windows();
+    let pet = windows.get("ball")?;
+    let scale = scale_factor(app);
+    let (screen_w, screen_h) = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| (m.size().width as f64, m.size().height as f64))
+        .unwrap_or((1920.0, 1080.0));
+    let pos = pet.outer_position().ok()?;
+    let size = pet.outer_size().ok()?;
+    let (px, py, pw) = (pos.x as f64, pos.y as f64, size.width as f64);
+    let mut x = px + pw + 8.0 * scale;
+    if x + w * scale > screen_w - 8.0 {
+        x = px - w * scale - 8.0 * scale;
+    }
+    let x = x.clamp(8.0, (screen_w - w * scale - 8.0).max(8.0));
+    let y = py.clamp(8.0, (screen_h - h * scale - 8.0).max(8.0));
+    Some((x, y))
+}
+
+/// 打开/收起桌宠旁的功能弹窗（再次触发同面板 = 收起；两面板互斥）。
+/// 由桌宠气泡菜单的 pet-panel 事件触发，payload: "chat" / "analysis"。
+fn open_panel(app: &AppHandle, panel: &str) {
+    let Some((label, url, w, h, title)) = panel_conf(panel) else { return };
+    // 互斥：打开一个面板时收起另一个
+    let other = if label == "panel-chat" { "panel-analysis" } else { "panel-chat" };
+    if let Some(o) = app.webview_windows().get(other) {
+        let _ = o.hide();
+    }
+    let scale = scale_factor(app);
+    if let Some(win) = app.webview_windows().get(label) {
+        if win.is_visible().unwrap_or(false) {
+            let _ = win.hide();
+            return;
+        }
+        let _ = win.show();
+        if let Some((x, y)) = panel_anchor(app, w, h) {
+            let _ = win.set_position(PhysicalPosition::new(x as i32, y as i32));
+        }
+        return;
+    }
+    let Some((x, y)) = panel_anchor(app, w, h) else { return };
+    let _ = WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+        .title(title)
+        .inner_size(w, h)
+        .resizable(false)
+        .maximizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .position(x / scale, y / scale)
+        .build();
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(w) = app.webview_windows().get("main") {
         let _ = w.show();
@@ -456,6 +522,13 @@ pub fn run() {
                 broadcast_ball_form(&app_for_form_query);
             });
 
+            // 前端事件：桌宠气泡菜单 → 打开/收起桌宠旁的功能弹窗（payload: "chat"/"analysis"）
+            let app_for_panel = app.app_handle().clone();
+            app.listen("pet-panel", move |event| {
+                let panel = serde_json::from_str::<String>(event.payload()).unwrap_or_default();
+                open_panel(&app_for_panel, &panel);
+            });
+
             // 前端事件：低额度系统通知，由 Rust 端发原生 Toast
             let app_for_notify = app.app_handle().clone();
             app.listen("show-notify", move |event| {
@@ -491,6 +564,10 @@ pub fn run() {
                     if let Some(app) = window.app_handle().try_state::<ShellState>() {
                         *app.mini_flyout.lock().unwrap() = false;
                     }
+                    let _ = window.hide();
+                    api.prevent_close();
+                } else if window.label().starts_with("panel-") {
+                    // 功能弹窗关闭按钮 = 隐藏（桌宠菜单可再次唤起）
                     let _ = window.hide();
                     api.prevent_close();
                 }
