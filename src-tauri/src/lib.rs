@@ -294,7 +294,7 @@ fn set_ball(app: &AppHandle, visible: bool) {
 /// 功能弹窗定义：(窗口 label, 路由, 逻辑宽, 逻辑高, 标题)
 fn panel_conf(panel: &str) -> Option<(&'static str, &'static str, f64, f64, &'static str)> {
     match panel {
-        "chat" => Some(("panel-chat", "index.html#panel-chat", 380.0, 560.0, "桌看 · 对话")),
+        "chat" => Some(("panel-chat", "index.html#panel-chat", 450.0, 560.0, "桌看 · 对话")),
         "analysis" => Some(("panel-analysis", "index.html#panel-analysis", 480.0, 560.0, "桌看 · 文件分析")),
         _ => None,
     }

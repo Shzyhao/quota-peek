@@ -59,7 +59,7 @@ export function mountChatPage(el, { repo }) {
     </div>
     <div class="chat-messages" data-role="chat-messages"></div>
     <div class="chat-input">
-      <textarea data-role="chat-input" rows="2" placeholder="和桌宠说点什么…（Enter 发送 / Shift+Enter 换行）"></textarea>
+      <textarea data-role="chat-input" rows="2" placeholder="和桌宠聊聊（Enter 发送）"></textarea>
       <div class="chat-input-actions">
         <button class="btn primary" data-role="chat-send">发送</button>
         <button class="btn" data-role="chat-stop" hidden>停止</button>

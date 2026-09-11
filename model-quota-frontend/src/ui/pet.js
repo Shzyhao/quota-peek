@@ -110,8 +110,10 @@ export async function renderPet({ root, repo }) {
       <div class="pet-bubble" hidden></div>
       <div class="pet-input-bar">
         <input data-role="pet-input" placeholder="和桌宠聊聊…" maxlength="2000">
-        <button data-role="pet-skin" title="换装">👗</button>
-        <button data-role="pet-send" title="发送">➤</button>
+        <button data-role="pet-skin" title="换装" aria-label="换装">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M9.2 3h5.6l-.9 4.6 4.3 10.2a1 1 0 0 1-.92 1.4H6.72a1 1 0 0 1-.92-1.4l4.3-10.2L9.2 3z"/><path d="M9.2 3c.9 1.2 2 1.8 2.8 1.8S13.9 4.2 14.8 3"/></svg>
+        </button>
+        <button data-role="pet-send" title="发送" aria-label="发送">➤</button>
       </div>
     </div>`;
   const stage = root.querySelector('.pet-stage');
