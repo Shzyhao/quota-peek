@@ -2247,3 +2247,204 @@ html.ball-mode body {
   letter-spacing: 1px;
   color: rgba(232, 241, 255, 0.6);
 }
+
+/* ============================================================
+   美化层：滚动条 / 品牌区 / 导航 / 按钮 / 卡片 / 聊天 / 面板
+   全部基于 tokens，深浅主题自适应
+   ============================================================ */
+
+/* —— 细滚动条（WebKit 桌面壳与网页版一致） —— */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 38%, transparent);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 62%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* —— 侧边栏品牌区：渐变徽标 + 字距 —— */
+.brand {
+  padding: 6px 8px;
+  letter-spacing: 0.04em;
+}
+
+.brand svg {
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+  border-radius: 8px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 62%, #8b5cf6));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 35%, transparent);
+}
+
+/* —— 导航：active 左侧强调条 + 图标亮起 —— */
+.nav-item {
+  position: relative;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.nav-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--primary);
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.nav-item.active::before { opacity: 1; }
+
+.nav-item.active svg { opacity: 1; }
+
+.nav-item.active {
+  background: linear-gradient(90deg, var(--primary-soft), transparent 130%);
+}
+
+/* —— 主按钮：渐变 + 悬浮阴影 —— */
+.btn.primary {
+  background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+  border-color: transparent;
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--primary) 30%, transparent);
+  color: var(--on-primary);
+}
+
+.btn.primary:hover:not(:disabled) {
+  color: var(--on-primary);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--primary) 42%, transparent);
+  transform: translateY(-1px);
+}
+
+.btn.primary:active:not(:disabled) { transform: translateY(0); }
+
+/* —— 顶栏：更轻盈的底部分隔 —— */
+.topbar {
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+/* —— 卡片体系统一柔和阴影与悬浮 —— */
+.stat,
+.provider-card,
+.settings-card,
+.analysis-result,
+.analysis-history-item,
+.chat-profile-item {
+  transition: box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.stat:hover,
+.provider-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 32%, var(--border));
+  box-shadow: var(--shadow-2);
+  transform: translateY(-1px);
+}
+
+/* 统计卡：标签大写字距 + 数值渐变强调 */
+.stat-label {
+  letter-spacing: 0.06em;
+  font-size: 11.5px;
+}
+
+.stat-value {
+  background: linear-gradient(120deg, var(--text), color-mix(in srgb, var(--text) 68%, var(--primary)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.stat.is-alert .stat-value {
+  background: linear-gradient(120deg, var(--error), var(--warn));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* —— 首页：英雄区品牌渐变字 + 卡片图标着色底 —— */
+.home-hero-text h1 {
+  background: linear-gradient(120deg, var(--primary), color-mix(in srgb, var(--primary) 55%, #8b5cf6));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.home-card-icon {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  border-radius: 12px;
+  background: var(--primary-soft);
+}
+
+.home-card:hover .home-card-icon {
+  background: color-mix(in srgb, var(--primary) 16%, var(--primary-soft));
+}
+
+/* —— 聊天：消息区轻点阵背景，凸出对话语境 —— */
+.chat-messages {
+  background-image: radial-gradient(color-mix(in srgb, var(--muted) 18%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+  border-radius: var(--radius-m);
+}
+
+/* —— 弹窗面板头：品牌渐变底 + 底部品牌色细条 —— */
+.panel-head {
+  position: relative;
+  background: linear-gradient(90deg, var(--primary-soft), var(--surface) 68%);
+}
+
+.panel-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--primary) 30%, transparent));
+  opacity: 0.55;
+}
+
+/* —— 进度条：渐变填充 —— */
+.progress .fill.ok {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 72%, transparent), var(--ok));
+}
+
+.progress .fill.warn {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--warn) 72%, transparent), var(--warn));
+}
+
+.progress .fill.error {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--error) 72%, transparent), var(--error));
+}
+
+/* —— 焦点光环统一 —— */
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+/* —— 选择可读性：文本选区主题色 —— */
+::selection {
+  background: color-mix(in srgb, var(--primary) 24%, transparent);
+}
