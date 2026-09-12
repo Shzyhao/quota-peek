@@ -79,6 +79,8 @@ const RUNTIME_GLOBALS = {
 
 /// 输入条高度（人物底部锚点上移量，避免人物被输入条挡住）
 const INPUT_BAR_H = 44;
+/// 人物占窗口可用高度的比例：模型贴边撑满显得过大，留出呼吸空间
+const PET_SCALE = 0.72;
 /// 气泡在回复完成后停留的时长
 const BUBBLE_LINGER_MS = 8000;
 
@@ -215,7 +217,7 @@ export async function renderPet({ root, repo }) {
         <button data-menu="chat">💬 对话</button>
         <button data-menu="analysis">📄 文件分析</button>
         <button data-menu="quota">📊 额度速览</button>
-        <button data-menu="skins">👗 换装</button>`;
+        <button data-menu="skins">👗 换装（切换到下一套）</button>`;
     }
   }
 
@@ -230,6 +232,9 @@ export async function renderPet({ root, repo }) {
   }
 
   menu.addEventListener('click', (e) => {
+    // 菜单内点击到此为止：showMenu 会重渲染 innerHTML，让冒泡中的 e.target
+    // 变成游离节点——root 的 closest('.pet-menu') 保护会失效，必须阻断冒泡
+    e.stopPropagation();
     const skinBtn = e.target.closest('[data-skin]');
     if (skinBtn) {
       void applySkin(skinBtn.dataset.skin);
@@ -237,7 +242,7 @@ export async function renderPet({ root, repo }) {
     }
     const act = e.target.closest('[data-menu]')?.dataset.menu;
     if (!act) return;
-    if (act === 'skins') showMenu('skins');
+    if (act === 'skins') cycleSkin();
     else if (act === 'back') showMenu('actions');
     else if (act === 'chat') { hideMenu(); emitTauri('pet-panel', 'chat'); playPetMotion(); }
     else if (act === 'analysis') { hideMenu(); emitTauri('pet-panel', 'analysis'); }
@@ -249,6 +254,13 @@ export async function renderPet({ root, repo }) {
     if (menu.hidden || !menu.querySelector('.pet-skin-grid')) showMenu('skins');
     else hideMenu();
   });
+
+  // 菜单「换装」= 循环切换到下一套皮肤（皮肤全列表用输入条 👗 打开）
+  function cycleSkin() {
+    const idx = SKINS.findIndex((s) => s.id === currentSkin());
+    const next = SKINS[(idx + 1) % SKINS.length];
+    void applySkin(next.id);
+  }
 
   // 换装：持久化皮肤 → 热重载模型（不重建 pixi 应用）；串行化防止连点导致模型叠加
   let skinLoading = false;
@@ -328,8 +340,10 @@ export async function renderPet({ root, repo }) {
   });
 
   // 原地单击 = 弹出/收起功能气泡菜单（配合随机小动作）。
-  // dragged 标记过滤拖动后残留的 click（mousedown 时复位，原生拖动循环常吞掉 click 但不保证）
+  // dragged 标记过滤拖动后残留的 click（mousedown 时复位，原生拖动循环常吞掉 click 但不保证）；
+  // isConnected 兜底：菜单重渲染后冒泡中的旧 target 已游离，closest 保护会失效
   root.addEventListener('click', (e) => {
+    if (!e.target.isConnected) return;
     if (e.target.closest('.pet-input-bar, .pet-bubble, .pet-menu')) return;
     if (dragged) {
       dragged = false;
@@ -355,14 +369,37 @@ export async function renderPet({ root, repo }) {
     modelRef?.motion(group, undefined, 3);
   };
 
-  // 构建并适配模型（铺满窗口、底部居中锚定在输入条上方）
+  // 构建并适配模型：按「内容实际包围盒」适配（模型画布自带大片空白，按画布
+  // 缩放会导致视觉尺寸失真+悬空）——先粗放，测 bounds，再缩放到目标高度并
+  // 平移到水平居中、内容底部贴输入条上方
   async function buildModel() {
     const model = await Live2DModelClass.from(modelUrlFor(currentSkin()));
     const availH = stage.clientHeight - INPUT_BAR_H;
-    const fit = Math.min(stage.clientWidth / model.width, availH / model.height);
-    model.scale.set(fit);
+    const cx = stage.clientWidth / 2;
     model.anchor.set(0.5, 1);
-    model.position.set(stage.clientWidth / 2, availH);
+    model.scale.set(Math.min(stage.clientWidth / model.width, availH / model.height));
+    model.position.set(cx, availH);
+    app.stage.addChild(model);
+
+    const targetH = availH * PET_SCALE;
+    // getBounds 返回物理像素（含 renderer.resolution），换算回逻辑像素再校准
+    const res = app.renderer.resolution || 1;
+    const logicalBounds = () => {
+      const b = model.getBounds();
+      return { x: b.x / res, y: b.y / res, width: b.width / res, height: b.height / res };
+    };
+    for (let i = 0; i < 2; i++) {
+      model.updateTransform();
+      const b = logicalBounds();
+      if (!b.height || !b.width) break;
+      // 缩放校准（第二轮收敛 getBounds 的舍入误差）
+      const adjust = targetH / b.height;
+      if (Math.abs(adjust - 1) > 0.01) model.scale.set(model.scale.x * adjust);
+      model.updateTransform();
+      const b2 = logicalBounds();
+      model.position.x += cx - (b2.x + b2.width / 2);
+      model.position.y += availH - (b2.y + b2.height);
+    }
     return model;
   }
 
@@ -416,7 +453,6 @@ export async function renderPet({ root, repo }) {
     stage.prepend(app.view);
 
     const model = await buildModel();
-    app.stage.addChild(model);
     modelRef = model;
 
     // 开场播一段 idle，随后由 MotionManager 自动循环空闲动作
