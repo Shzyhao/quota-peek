@@ -1,5 +1,7 @@
-// 桌宠 AI 对话核心：会话存储 + Tauri 命令封装 + 额度上下文注入。
+// 桌宠 AI 对话核心：会话存储 + Tauri 命令封装 + 额度上下文注入 + 供应商联动。
 // 纯逻辑与 IPC 分离（invoke/channel 由调用方注入），便于单测与网页版降级。
+
+import { getProviderType } from './providers.js';
 
 const HISTORY_KEY = 'mqc.chat.messages';
 const HISTORY_LIMIT = 100; // 存储上限：最近 100 条（含 user/assistant）
@@ -28,6 +30,29 @@ export function saveHistory(messages, storage = globalThis.localStorage) {
 
 export function clearHistory(storage = globalThis.localStorage) {
   storage?.removeItem(HISTORY_KEY);
+}
+
+// ——— 额度供应商 → 对话模型联动 ———
+
+/// 由额度供应商配置生成对话 profile：id 稳定（prov-<供应商id>），
+/// 重复导入天然覆盖旧值 = 同步语义。模型取供应商的 chatModel，
+/// 未设置时回退类型注册表 defaultChatModel。
+export function buildProfileFromProvider(p) {
+  const type = getProviderType(p.type);
+  return {
+    id: `prov-${p.id}`,
+    name: p.name,
+    base_url: String(p.baseUrl || type.defaultBaseUrl || '').replace(/\/+$/, ''),
+    model: p.chatModel || type.defaultChatModel || '',
+  };
+}
+
+/// 可导入联动供应商过滤：启用中、非双凭证类型（火山 IAM 的密钥不是模型 Key）
+export function importableProviders(providers) {
+  return (providers || []).filter((p) => {
+    if (p.enabled === false) return false;
+    return !getProviderType(p.type).needsSecret;
+  });
 }
 
 // ——— 额度上下文注入 ———

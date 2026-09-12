@@ -4,6 +4,7 @@
 
 import {
   loadHistory, saveHistory, clearHistory, buildQuotaContext, buildOutgoingMessages,
+  buildProfileFromProvider, importableProviders,
   isChatAvailable, getChatConfig, saveChatConfig, setChatKey, hasChatKey,
   deleteChatKey, testChatConnection, sendChat, cancelChat,
 } from '../core/chat.js';
@@ -40,6 +41,13 @@ export function mountChatPage(el, { repo }) {
     </div>
     <div class="chat-config" hidden>
       <div data-role="chat-profiles"></div>
+      <div class="chat-import">
+        <div class="chat-import-head">
+          <b>从额度供应商导入</b>
+          <span class="settings-hint">把额度查询里配好的供应商一键变成对话模型（需 OpenAI 兼容接口；火山方舟 IAM 类型不适用），密钥同步写入凭据管理器。模型可在供应商表单的「AI 默认模型」里改。</span>
+        </div>
+        <div data-role="chat-import-list"></div>
+      </div>
       <div class="chat-profile-form" hidden>
         <h4 data-role="chat-form-title">添加配置</h4>
         <label>名称<input data-field="name" placeholder="如 DeepSeek"></label>
@@ -115,9 +123,28 @@ export function mountChatPage(el, { repo }) {
     return `<div class="chat-bubble ${cls}${error ? ' error' : ''}"><span class="chat-text">${escapeHtml(content)}</span></div>`;
   }
 
+  async function renderImportList() {
+    const box = $('[data-role="chat-import-list"]');
+    if (!box) return;
+    const providers = importableProviders(repo.listProviders());
+    const items = providers.map((p) => {
+      const prof = buildProfileFromProvider(p);
+      const imported = config.profiles.some((x) => x.id === prof.id);
+      const ready = !!(prof.model && prof.base_url);
+      return `
+        <div class="chat-import-item">
+          <span class="chat-import-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+          <span class="chat-import-model" title="${escapeHtml(prof.model)}">${escapeHtml(prof.model || '未设模型')}</span>
+          <button class="btn ${imported ? '' : 'primary'}" data-role="chat-import" data-id="${escapeHtml(p.id)}" ${ready ? '' : 'disabled'} title="${ready ? '' : '请在供应商表单补全 Base URL / AI 默认模型'}">${imported ? '同步' : '导入'}</button>
+        </div>`;
+    });
+    box.innerHTML = items.join('') || '<p class="settings-hint">暂无可导入的供应商（先在「供应商」页添加）。</p>';
+  }
+
   function renderAll() {
     renderToolbar();
     void renderProfileList();
+    void renderImportList();
     renderMessages();
     $('[data-role="chat-persona"]').value = config.persona || '';
   }
@@ -233,6 +260,31 @@ export function mountChatPage(el, { repo }) {
       config.activeProfileId = id;
       await persistConfig();
       renderAll();
+    } else if (role === 'chat-import') {
+      // 从额度供应商导入/同步：profile 稳定 id 覆盖 = 同步；密钥随导入写入凭据管理器
+      testResult = '';
+      const p = repo.getProvider(id);
+      if (!p) return;
+      const prof = buildProfileFromProvider(p);
+      if (!prof.model || !prof.base_url) {
+        testResult = `「${p.name}」缺少 Base URL 或默认模型：请在供应商表单填写 Base URL 与「AI 默认模型」`;
+        showTestResult();
+        return;
+      }
+      config.profiles = config.profiles.filter((x) => x.id !== prof.id);
+      config.profiles.push(prof);
+      if (!config.activeProfileId) config.activeProfileId = prof.id;
+      if (p.apiKey) {
+        await setChatKey(prof.id, p.apiKey);
+      } else if (!(await hasChatKey(prof.id).catch(() => false))) {
+        testResult = `「${p.name}」未存 API Key，导入后无法调用：请在供应商表单补 Key 后再同步`;
+        showTestResult();
+      }
+      config.activeProfileId = prof.id;
+      await persistConfig();
+      if (!testResult) testResult = `已导入并启用：${p.name} · ${prof.model}`;
+      renderAll();
+      showTestResult();
     } else if (role === 'chat-profile-del') {
       config.profiles = config.profiles.filter((x) => x.id !== id);
       if (config.activeProfileId === id) config.activeProfileId = config.profiles[0]?.id ?? null;

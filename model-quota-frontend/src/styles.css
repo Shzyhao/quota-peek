@@ -1692,6 +1692,54 @@ select {
 
 .chat-profile-form h4 { grid-column: 1 / -1; margin: 0; }
 
+/* 从额度供应商导入区 */
+.chat-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+}
+
+.chat-import-head { display: flex; flex-direction: column; gap: 4px; }
+.chat-import-head b { font-size: 13.5px; }
+.chat-import-head .settings-hint { margin: 0; }
+
+.chat-import-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+
+.chat-import-name {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.chat-import-model {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: Consolas, monospace;
+}
+
+.chat-import-item .btn { flex: none; height: 28px; padding: 0 12px; font-size: 12.5px; }
+
 .chat-profile-form label {
   display: flex;
   flex-direction: column;

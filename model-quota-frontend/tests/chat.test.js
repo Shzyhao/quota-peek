@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { loadHistory, saveHistory, clearHistory, buildQuotaContext, buildOutgoingMessages } from '../src/core/chat.js';
+import {
+  loadHistory, saveHistory, clearHistory, buildQuotaContext, buildOutgoingMessages,
+  buildProfileFromProvider, importableProviders,
+} from '../src/core/chat.js';
 
 // 内存版 storage 桩（不依赖 jsdom localStorage 状态残留）
 function memoryStorage() {
@@ -98,5 +101,40 @@ describe('发往模型的消息组装', () => {
     ];
     const out = buildOutgoingMessages(history, null);
     expect(out).toHaveLength(2);
+  });
+});
+
+describe('额度供应商 → 对话模型联动', () => {
+  it('未设置 chatModel 时回退类型默认模型与默认地址', () => {
+    const prof = buildProfileFromProvider({ id: 'abc', name: 'DeepSeek 主账号', type: 'deepseek', baseUrl: '', chatModel: '' });
+    expect(prof).toEqual({
+      id: 'prov-abc',
+      name: 'DeepSeek 主账号',
+      base_url: 'https://api.deepseek.com',
+      model: 'deepseek-chat',
+    });
+  });
+
+  it('供应商自定义的 Base URL 与 chatModel 优先生效', () => {
+    const prof = buildProfileFromProvider({
+      id: 'x', name: '中转站', type: 'openai', baseUrl: 'https://relay.example.com/v1/', chatModel: 'gpt-x',
+    });
+    expect(prof.base_url).toBe('https://relay.example.com/v1'); // 去尾部斜杠
+    expect(prof.model).toBe('gpt-x');
+  });
+
+  it('custom 类型无默认模型时 model 为空串', () => {
+    const prof = buildProfileFromProvider({ id: 'c', name: '手动', type: 'custom', baseUrl: '', chatModel: '' });
+    expect(prof.model).toBe('');
+    expect(prof.base_url).toBe('');
+  });
+
+  it('importableProviders 过滤停用与双凭证类型（火山 IAM）', () => {
+    const out = importableProviders([
+      { id: '1', name: 'A', type: 'deepseek', enabled: true },
+      { id: '2', name: '停用', type: 'deepseek', enabled: false },
+      { id: '3', name: '方舟', type: 'volcengine', enabled: true },
+    ]);
+    expect(out.map((p) => p.id)).toEqual(['1']);
   });
 });

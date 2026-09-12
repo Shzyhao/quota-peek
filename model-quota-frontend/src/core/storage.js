@@ -53,6 +53,8 @@ export function normalizeProviderConfig(input) {
     // 双凭证类型（如火山方舟 IAM）的第二凭证：Secret Access Key
     apiSecret: String(input.apiSecret || '').trim(),
     baseUrl: String(input.baseUrl || '').trim(),
+    // AI 对话 / 文件分析使用的默认模型（留空用类型注册表的 defaultChatModel）
+    chatModel: String(input.chatModel || '').trim(),
     planTotalQuota: toNumberOrNull(input.planTotalQuota),
     usedQuota: toNumberOrNull(input.usedQuota),
     remainingQuota: toNumberOrNull(input.remainingQuota),

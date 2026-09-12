@@ -244,21 +244,28 @@ export async function renderPet({ root, repo }) {
     else if (act === 'quota') { hideMenu(); emitTauri('ball-clicked'); }
   });
 
-  // 输入条上的换装按钮 = 直接打开皮肤选择
+  // 输入条上的换装按钮：任何状态都切到换装视图（菜单开着也切过去），已在换装视图才收起
   root.querySelector('[data-role="pet-skin"]').addEventListener('click', () => {
-    if (menu.hidden) showMenu('skins');
+    if (menu.hidden || !menu.querySelector('.pet-skin-grid')) showMenu('skins');
     else hideMenu();
   });
 
-  // 换装：持久化皮肤 → 热重载模型（不重建 pixi 应用）
+  // 换装：持久化皮肤 → 热重载模型（不重建 pixi 应用）；串行化防止连点导致模型叠加
+  let skinLoading = false;
   async function applySkin(id) {
-    localStorage.setItem(SKIN_KEY, id);
-    hideMenu();
-    const label = SKINS.find((s) => s.id === id)?.label || id;
-    showBubble(`正在换上「${label}」…`, { autoHide: false });
-    await reloadModel();
-    showBubble(`已换上「${label}」✨`);
-    playPetMotion();
+    if (skinLoading) return;
+    skinLoading = true;
+    try {
+      localStorage.setItem(SKIN_KEY, id);
+      hideMenu();
+      const label = SKINS.find((s) => s.id === id)?.label || id;
+      showBubble(`正在换上「${label}」…`, { autoHide: false });
+      await reloadModel();
+      showBubble(`已换上「${label}」✨`);
+      playPetMotion();
+    } finally {
+      skinLoading = false;
+    }
   }
 
   // ——— 拖入文件即分析（Tauri 拦截系统拖放转发事件，提供绝对路径） ———

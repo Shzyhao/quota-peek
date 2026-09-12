@@ -61,6 +61,9 @@ export function openProviderForm({ mount, providerTypes, existing, onSave, exist
           </span>
           <span class="test-result" data-role="test-result" hidden></span>
         </label>
+        <label class="full">AI 默认模型
+          <input name="chatModel" placeholder="对话 / 文件分析用的模型，留空用类型默认" value="${escapeHtml(existing ? existing.chatModel || '' : '')}">
+        </label>
       </div>
       <p class="form-divider">额度信息 <i>（可选 · 不支持自动查询的供应商手动维护）</i></p>
       <div class="form-grid">
@@ -188,6 +191,7 @@ export function openProviderForm({ mount, providerTypes, existing, onSave, exist
       apiKey: $('apiKey').value.trim(),
       apiSecret: $('apiSecret').value.trim(),
       baseUrl: baseUrlInput.value.trim(),
+      chatModel: $('chatModel').value,
       planTotalQuota: $('planTotalQuota').value,
       usedQuota: $('usedQuota').value,
       remainingQuota: $('remainingQuota').value,
