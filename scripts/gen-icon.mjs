@@ -1,4 +1,5 @@
-// 生成 1024x1024 应用图标：深色圆角底 + 绿/橙/红三根递增柱条（用量状态语义）。
+// 生成 1024x1024 应用图标：品牌绿渐变圆角底 + 白色三根递增柱条（用量状态语义）。
+// 与托盘动态图标（严重度色圆角方块 + 白字）同一视觉语言：绿 = 健康。
 // 纯 Node 实现（zlib + 手写 PNG 编码），2x 超采样抗锯齿。
 import zlib from 'node:zlib';
 import fs from 'node:fs';
@@ -6,13 +7,13 @@ import fs from 'node:fs';
 const S = 2048; // 超采样画布
 const OUT = 1024;
 
-// 设计 tokens（与前端主题色系一致）
-const BG_TOP = [30, 41, 59];    // slate-800
-const BG_BOTTOM = [15, 23, 42]; // slate-900
+// 设计 tokens（与托盘动态图标同色系）
+const BG_TOP = [52, 211, 153];    // emerald-400
+const BG_BOTTOM = [5, 150, 105];  // emerald-600
 const BARS = [
-  { color: [16, 185, 129], h: 0.38 }, // emerald-500
-  { color: [245, 158, 11], h: 0.58 }, // amber-500
-  { color: [239, 68, 68], h: 0.82 },  // red-500
+  { color: [255, 255, 255], h: 0.38 },
+  { color: [255, 255, 255], h: 0.58 },
+  { color: [255, 255, 255], h: 0.82 },
 ];
 
 const R = S * 0.185; // 圆角半径

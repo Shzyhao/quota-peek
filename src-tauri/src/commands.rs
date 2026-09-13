@@ -685,8 +685,13 @@ pub fn update_tray_status(
         return Err("图标像素数据大小不符".into());
     }
     let tray = app.tray_by_id("quota-tray").ok_or("托盘不可用")?;
-    tray.set_icon(Some(tauri::image::Image::new_owned(rgba, width, height)))
+    tray.set_icon(Some(tauri::image::Image::new_owned(rgba.clone(), width, height)))
         .map_err(|e| e.to_string())?;
     tray.set_tooltip(Some(if tooltip.is_empty() { "桌看".to_string() } else { tooltip }))
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // 主窗/任务栏大图标与托盘同款三色状态图，视觉一致
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_icon(tauri::image::Image::new_owned(rgba, width, height));
+    }
+    Ok(())
 }
