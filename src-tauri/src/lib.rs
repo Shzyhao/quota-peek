@@ -15,6 +15,7 @@ use tauri_plugin_notification::NotificationExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+mod agent;
 mod commands;/// 迷你窗逻辑尺寸（与 open_mini / 前端样式保持一致）
 const MINI_W: f64 = 300.0;
 const MINI_H: f64 = 430.0;
@@ -415,7 +416,11 @@ pub fn run() {
             commands::quota_secret_has,
             commands::quota_secret_delete,
             commands::set_refresh_schedule,
-            commands::update_tray_status
+            commands::update_tray_status,
+            commands::chat_read_file,
+            agent::agent_send,
+            agent::agent_resolve,
+            agent::agent_cancel
         ])
         .setup(|app| {
             let prefs = load_prefs(app.app_handle());
@@ -437,6 +442,9 @@ pub fn run() {
             });
             commands::spawn_refresh_scheduler(app.app_handle().clone(), sched.clone());
             app.manage(sched);
+
+            // Agent 状态（单飞循环 + 待确认调用 + 审计）
+            app.manage(agent::AgentState::new());
 
             let tray = TrayIconBuilder::with_id("quota-tray")
                 .icon(app.default_window_icon().unwrap().clone())

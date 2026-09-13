@@ -1,6 +1,6 @@
 [package]
 name = "model-quota-app"
-version = "0.6.5"
+version = "0.7.0"
 description = "桌看 - Live2D 桌宠看板娘：AI 对话 · 文件分析 · 额度查询"
 authors = ["model-quota"]
 edition = "2021"
@@ -27,6 +27,10 @@ liteai-core = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
 liteai-parsers = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
 liteai-output = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Agent 工具循环：OpenAI 兼容 tools 请求 / 本地时间 / 剪贴板
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+arboard = "3"
 
 [profile.release]
 opt-level = "s"

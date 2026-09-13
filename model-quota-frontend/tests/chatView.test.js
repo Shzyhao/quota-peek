@@ -2,17 +2,22 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mountChatPage } from '../src/ui/chatView.js';
 
 // 会话管理 UI 测试：stub chat_get_config 让 mountChatPage 走桌面分支
-function stubTauri() {
+function stubTauri({ readFile } = {}) {
   globalThis.__TAURI__ = {
     core: {
-      invoke: vi.fn(async (cmd) => {
+      invoke: vi.fn(async (cmd, args) => {
         if (cmd === 'chat_get_config') return { profiles: [], active_profile_id: null, persona: '' };
         if (cmd === 'chat_has_key') return false;
+        if (cmd === 'chat_read_file') {
+          if (readFile) return readFile(args?.path);
+          return { name: 'stub.txt', content: '内容'.repeat(10), truncated: false, chars: 20 };
+        }
         return null;
       }),
       Channel: vi.fn(),
     },
     event: { emit: vi.fn(), listen: vi.fn(async () => () => {}) },
+    dialog: { open: vi.fn(async () => ['D:\doc\报告.pdf', 'D:\doc\数据.csv']) },
   };
 }
 
@@ -66,5 +71,64 @@ describe('chatView 会话管理', () => {
     });
     expect(localStorage.getItem('mqc.chat.messages')).toBeNull();
     expect(readSessions()[0].messages).toHaveLength(1);
+  });
+});
+
+describe('chatView 会话附件', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.body.innerHTML = '';
+  });
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  it('选择文件后显示附件 chips，可移除', async () => {
+    stubTauri();
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-attach"]')).toBeTruthy());
+
+    root.querySelector('[data-role="chat-attach"]').click();
+    await vi.waitFor(() => {
+      const box = root.querySelector('[data-role="chat-attachments"]');
+      expect(box.hidden).toBe(false);
+      expect(box.querySelectorAll('.chat-attach-chip')).toHaveLength(2);
+    });
+    // 移除一个
+    root.querySelector('[data-role="chat-attach-del"]').click();
+    expect(root.querySelectorAll('.chat-attach-chip')).toHaveLength(1);
+  });
+
+  it('解析失败时附件不加入并提示', async () => {
+    stubTauri({ readFile: () => { throw new Error('解析失败：损坏的 PDF'); } });
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-attach"]')).toBeTruthy());
+
+    root.querySelector('[data-role="chat-attach"]').click();
+    await vi.waitFor(() => {
+      expect(root.querySelector('[data-role="chat-attachments"]').hidden).toBe(true);
+      const hint = root.querySelector('[data-role="chat-test-result"]');
+      expect(hint.textContent).toContain('解析失败');
+    });
+  });
+
+  it('Agent 开关切换并持久化', async () => {
+    stubTauri();
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-agent-toggle"]')).toBeTruthy());
+
+    const toggle = root.querySelector('[data-role="chat-agent-toggle"]');
+    expect(toggle.classList.contains('active')).toBe(false);
+    toggle.click();
+    expect(toggle.classList.contains('active')).toBe(true);
+    expect(localStorage.getItem('mqc.chat.agent')).toBe('1');
+    toggle.click();
+    expect(localStorage.getItem('mqc.chat.agent')).toBe('0');
   });
 });

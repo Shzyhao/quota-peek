@@ -185,8 +185,28 @@ export function buildOutgoingMessages(history, quotaContext, maxRounds = 12) {
   // 历史按轮截断，且从第一条完整消息开始（避免残留孤立 assistant 消息）
   const recent = history.slice(-maxRounds * 2);
   const start = recent[0]?.role === 'assistant' ? 1 : 0;
-  msgs.push(...recent.slice(start).map((m) => ({ role: m.role, content: m.content })));
+  const kept = recent.slice(start).map((m, idx, arr) => {
+    const isLast = idx === arr.length - 1;
+    let content = m.content || '';
+    if (m.attachments?.length) {
+      content += (content ? '\n' : '') + (isLast ? attachmentsToText(m.attachments) : stubAttachments(m.attachments));
+    }
+    return { role: m.role, content };
+  });
+  msgs.push(...kept);
   return msgs;
+}
+
+// 附件 → 完整文本块（只随最后一条用户消息发送）
+export function attachmentsToText(attachments = []) {
+  return attachments
+    .map((a) => `【附件文件：${a.name}${a.truncated ? '，内容超长已截断' : ''}】\n${a.content}`)
+    .join('\n\n');
+}
+
+// 附件 → 占位块（历史轮省略正文，防止反复携带大文本）
+function stubAttachments(attachments = []) {
+  return attachments.map((a) => `【附件：${a.name}（内容已省略）】`).join('\n');
 }
 
 // ——— Tauri IPC 封装（桌面壳 only；网页版无 __TAURI__.core 时 isChatAvailable=false） ———
@@ -253,4 +273,64 @@ export function sendChat(messages, { onToken, onDone, onError, onCancelled } = {
       resolve();
     });
   });
+}
+
+// ——— 会话附件（桌面壳解析文件为文本） ———
+
+/// 解析本地文件为文本（Rust 侧复用轻析解析器；截断至 8000 字符）。
+export async function readChatFile(path) {
+  const v = await invoke('chat_read_file', { path });
+  return v ? { name: String(v.name || ''), content: String(v.content || ''), truncated: !!v.truncated, chars: v.chars ?? 0 } : null;
+}
+
+// ——— Agent（单步确认式工具循环） ———
+
+export function isAgentAvailable() {
+  return isChatAvailable();
+}
+
+/// 发起 Agent 任务。回调：onToolProposed({callId,name,args,danger})、
+/// onToolResult({name,ok,output,durationMs})、onDone(text)、onError(message)。
+/// 模型提出工具调用后任务挂起，须经 agentResolve 续跑。
+export function agentSend(messages, { onToolProposed, onToolResult, onDone, onError } = {}) {
+  const core = tauriCore();
+  if (!core?.invoke || !core.Channel) return Promise.reject(new Error('仅桌面版支持 Agent'));
+  return new Promise((resolve) => {
+    const channel = new core.Channel();
+    channel.onmessage = (ev) => {
+      if (!ev || typeof ev !== 'object') return;
+      if (ev.type === 'tool_proposed') onToolProposed?.(ev.data ?? {});
+      else if (ev.type === 'tool_result') onToolResult?.(ev.data ?? {});
+      else if (ev.type === 'done') { onDone?.(ev.data?.text ?? ''); resolve(); }
+      else if (ev.type === 'error') { onError?.(ev.data?.message ?? '请求失败'); resolve(); }
+    };
+    invoke('agent_send', { messages, onEvent: channel }).catch((e) => {
+      onError?.(String(e?.message || e));
+      resolve();
+    });
+  });
+}
+
+/// 对挂起的工具调用作出决定（批准/拒绝），续跑循环；回调同 agentSend。
+export function agentResolve(approved, handlers = {}) {
+  const core = tauriCore();
+  if (!core?.invoke || !core.Channel) return Promise.reject(new Error('仅桌面版支持 Agent'));
+  return new Promise((resolve) => {
+    const channel = new core.Channel();
+    channel.onmessage = (ev) => {
+      if (!ev || typeof ev !== 'object') return;
+      if (ev.type === 'tool_proposed') handlers.onToolProposed?.(ev.data ?? {});
+      else if (ev.type === 'tool_result') handlers.onToolResult?.(ev.data ?? {});
+      else if (ev.type === 'done') { handlers.onDone?.(ev.data?.text ?? ''); resolve(); }
+      else if (ev.type === 'error') { handlers.onError?.(ev.data?.message ?? '请求失败'); resolve(); }
+    };
+    invoke('agent_resolve', { approved, onEvent: channel }).catch((e) => {
+      handlers.onError?.(String(e?.message || e));
+      resolve();
+    });
+  });
+}
+
+export function cancelAgent() {
+  return invoke('agent_cancel');
 }

@@ -4,10 +4,11 @@
 
 import {
   loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession, newSession,
-  buildQuotaContext, buildOutgoingMessages,
+  buildQuotaContext, buildOutgoingMessages, attachmentsToText,
   buildProfileFromProvider, importableProviders,
   isChatAvailable, getChatConfig, saveChatConfig, setChatKey, hasChatKey,
   deleteChatKey, testChatConnection, sendChat, cancelChat,
+  readChatFile, agentSend, agentResolve, cancelAgent,
 } from '../core/chat.js';
 import { readSecret } from '../core/secrets.js';
 import { escapeHtml } from './format.js';
@@ -28,6 +29,13 @@ export function mountChatPage(el, { repo }) {
   let { sessions, activeId } = loaded;
   let messages = sessions.find((s) => s.id === activeId)?.messages ?? [];
   let streaming = false;
+  // 会话附件（待发送）：[{name, content, truncated}]
+  let attachments = [];
+  // Agent 模式：模型可提议系统工具，逐个经确认卡片批准执行
+  let agentMode = localStorage.getItem('mqc.chat.agent') === '1';
+  let agentRunning = false;
+  let agentLive = [];   // 运行中的工具卡片（挂起的提议/已执行结果），不入会话
+  let agentHandlers = null;
   // 编辑中的 profile（null = 新建未开始；{...profile, key} = 编辑/新建表单内容）
   let editing = null;
   let testResult = '';
@@ -79,9 +87,12 @@ export function mountChatPage(el, { repo }) {
       <p class="settings-hint" data-role="chat-test-result"></p>
     </div>
     <div class="chat-messages" data-role="chat-messages"></div>
+    <div class="chat-attachments" data-role="chat-attachments" hidden></div>
     <div class="chat-input">
       <textarea data-role="chat-input" rows="2" placeholder="和桌宠聊聊（Enter 发送）"></textarea>
       <div class="chat-input-actions">
+        <button class="btn" data-role="chat-attach" title="附加文件（pdf / docx / xlsx / txt / csv / json / 代码等文本类）">📎</button>
+        <button class="btn agent-toggle${agentMode ? ' active' : ''}" data-role="chat-agent-toggle" title="Agent 模式：AI 可调用系统工具（每次执行都需你批准）">🔧 Agent</button>
         <button class="btn primary" data-role="chat-send">发送</button>
         <button class="btn" data-role="chat-stop" hidden>停止</button>
       </div>
@@ -129,15 +140,51 @@ export function mountChatPage(el, { repo }) {
 
   function renderMessages() {
     const box = $('[data-role="chat-messages"]');
-    const html = messages.map((m) => bubbleHtml(m.role, m.content, m.error));
-    if (streaming) html.push('<div class="chat-bubble assistant streaming" data-role="chat-stream"><span class="chat-text"></span><span class="chat-cursor"></span></div>');
+    const html = messages.map((m) => bubbleHtml(m));
+    for (const c of agentLive) {
+      if (c.kind === 'proposed' && !c.done) html.push(proposedCardHtml(c));
+    }
+    if (streaming && !agentMode) html.push('<div class="chat-bubble assistant streaming" data-role="chat-stream"><span class="chat-text"></span><span class="chat-cursor"></span></div>');
     box.innerHTML = html.join('') || '<div class="chat-welcome">和桌宠打个招呼吧 👋<br/><small>对话发起时会自动附上你的额度数据，可以直接问「我还剩多少额度」</small></div>';
     box.scrollTop = box.scrollHeight;
   }
 
-  function bubbleHtml(role, content, error) {
-    const cls = role === 'user' ? 'user' : 'assistant';
-    return `<div class="chat-bubble ${cls}${error ? ' error' : ''}"><span class="chat-text">${escapeHtml(content)}</span></div>`;
+  function bubbleHtml(m) {
+    if (m.tool) {
+      const t = m.tool;
+      return `<div class="chat-tool-card${t.ok ? '' : ' fail'}${t.danger ? ' danger' : ''}">
+        <div class="chat-tool-head">🔧 ${escapeHtml(t.name)} <span class="chat-tool-status">${t.ok ? '✓ 已执行' : '✗ 失败/拒绝'}</span></div>
+        ${t.output ? `<pre class="chat-tool-out">${escapeHtml(String(t.output).slice(0, 600))}</pre>` : ''}
+      </div>`;
+    }
+    const cls = m.role === 'user' ? 'user' : 'assistant';
+    const att = m.attachments?.length
+      ? `<div class="chat-attach-list">${m.attachments.map((a) => `<span class="chat-attach-chip">📄 ${escapeHtml(a.name)}</span>`).join('')}</div>`
+      : '';
+    return `<div class="chat-bubble ${cls}${m.error ? ' error' : ''}">${att}<span class="chat-text">${escapeHtml(m.content)}</span></div>`;
+  }
+
+  // 挂起中的工具提议卡（批准/拒绝）
+  function proposedCardHtml(c) {
+    const argsText = JSON.stringify(c.args ?? {}, null, 2);
+    const argsShort = argsText.length > 800 ? `${argsText.slice(0, 800)}…` : argsText;
+    return `<div class="chat-tool-card pending${c.danger ? ' danger' : ''}">
+      <div class="chat-tool-head">🔧 Agent 请求执行：${escapeHtml(c.name)}${c.danger ? ' <span class="chat-tool-danger-tag">高危</span>' : ''}</div>
+      <pre class="chat-tool-out">${escapeHtml(argsShort)}</pre>
+      <div class="chat-tool-actions">
+        <button class="btn primary" data-role="agent-approve">批准执行</button>
+        <button class="btn danger" data-role="agent-deny">拒绝</button>
+      </div>
+    </div>`;
+  }
+
+  function renderAttachments() {
+    const box = $('[data-role="chat-attachments"]');
+    if (!box) return;
+    box.hidden = !attachments.length;
+    box.innerHTML = attachments
+      .map((a, i) => `<span class="chat-attach-chip">📄 ${escapeHtml(a.name)}${a.truncated ? '（已截断）' : ''}<button data-role="chat-attach-del" data-id="${i}" aria-label="移除附件">×</button></span>`)
+      .join('');
   }
 
   async function renderImportList() {
@@ -163,6 +210,7 @@ export function mountChatPage(el, { repo }) {
     void renderProfileList();
     void renderImportList();
     renderMessages();
+    renderAttachments();
     $('[data-role="chat-persona"]').value = config.persona || '';
   }
 
@@ -208,16 +256,34 @@ export function mountChatPage(el, { repo }) {
     if (!profile) { testResult = '请先在「模型配置」中添加并启用一套配置'; showTestResult(); return; }
 
     emitChatStatus('thinking');
-    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'user', content: text, time: Date.now() }));
+    const pendingAttachments = attachments;
+    attachments = [];
+    renderAttachments();
+    ({ sessions, activeId } = appendToSession(sessions, activeId, {
+      role: 'user',
+      content: text,
+      attachments: pendingAttachments.length ? pendingAttachments : undefined,
+      time: Date.now(),
+    }));
     syncMessages();
     setStreaming(true);
-    let reply = '';
     const quotaCtx = buildQuotaContext(repo.listProviders());
-    const outgoing = buildOutgoingMessages(
-      [...messages.slice(0, -1)], quotaCtx,
-    );
-    outgoing.push({ role: 'user', content: text });
+    const outgoing = buildOutgoingMessages([...messages.slice(0, -1)], quotaCtx);
+    outgoing.push({
+      role: 'user',
+      content: pendingAttachments.length ? `${text}
+${attachmentsToText(pendingAttachments)}` : text,
+    });
 
+    if (agentMode) {
+      agentRunning = true;
+      agentLive = [];
+      agentHandlers = makeAgentHandlers();
+      await agentSend(outgoing, agentHandlers);
+      return;
+    }
+
+    let reply = '';
     const streamEl = () => $('[data-role="chat-stream"] .chat-text');
     await sendChat(outgoing, {
       onToken: (t) => {
@@ -232,6 +298,41 @@ export function mountChatPage(el, { repo }) {
       onError: (msg) => finishExchange(reply || `（请求失败：${msg}）`, true),
       onCancelled: () => finishExchange(reply || '（已停止）', false),
     });
+  }
+
+  // ——— Agent（单步确认式工具循环）———
+
+  function makeAgentHandlers() {
+    return {
+      onToolProposed: (data) => {
+        agentLive = [{ kind: 'proposed', done: false, ...data }];
+        renderMessages();
+      },
+      onToolResult: (data) => {
+        // 提议卡标记完成并移除，结果卡入库（会话历史可回看）
+        agentLive = [];
+        ({ sessions, activeId } = appendToSession(sessions, activeId, {
+          role: 'assistant',
+          content: '',
+          tool: { name: data.name, ok: !!data.ok, output: String(data.output || ''), danger: !!data.danger },
+          time: Date.now(),
+        }));
+        syncMessages();
+        renderMessages();
+      },
+      onDone: (text) => finishAgent(text, false),
+      onError: (msg) => finishAgent(`（Agent 出错：${msg}）`, true),
+    };
+  }
+
+  function finishAgent(text, error) {
+    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'assistant', content: text, error, time: Date.now() }));
+    syncMessages();
+    agentLive = [];
+    agentRunning = false;
+    agentHandlers = null;
+    setStreaming(false);
+    emitChatStatus(error ? 'error' : 'replied');
   }
 
   function finishExchange(reply, error) {
@@ -263,7 +364,37 @@ export function mountChatPage(el, { repo }) {
       const text = input.value.trim();
       if (text) { input.value = ''; await doSend(text); }
     } else if (role === 'chat-stop') {
-      await cancelChat().catch(() => {});
+      if (agentRunning) await cancelAgent().catch(() => {});
+      else await cancelChat().catch(() => {});
+    } else if (role === 'chat-attach') {
+      const selected = await globalThis.__TAURI__?.dialog?.open?.({
+        multiple: true,
+        title: '选择要附加的文件（pdf / docx / xlsx / txt / csv / json / 代码等文本类）',
+      });
+      if (!selected) return;
+      const list = Array.isArray(selected) ? selected : [selected];
+      for (const path of list) {
+        if (attachments.length >= 4) { testResult = '一条消息最多附加 4 个文件'; showTestResult(); break; }
+        try {
+          const att = await readChatFile(path);
+          if (att) attachments.push(att);
+        } catch (e) {
+          testResult = String(e?.message || e);
+          showTestResult();
+        }
+      }
+      renderAttachments();
+    } else if (role === 'chat-attach-del') {
+      attachments.splice(Number(id), 1);
+      renderAttachments();
+    } else if (role === 'chat-agent-toggle') {
+      agentMode = !agentMode;
+      localStorage.setItem('mqc.chat.agent', agentMode ? '1' : '0');
+      btn.classList.toggle('active', agentMode);
+    } else if (role === 'agent-approve' || role === 'agent-deny') {
+      if (!agentRunning || !agentHandlers) return;
+      el.querySelectorAll('.chat-tool-actions button').forEach((b) => (b.disabled = true));
+      await agentResolve(role === 'agent-approve', agentHandlers);
     } else if (role === 'chat-clear') {
       ({ sessions, activeId } = clearActiveMessages(sessions, activeId));
       syncMessages();

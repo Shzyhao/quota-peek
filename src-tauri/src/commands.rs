@@ -104,8 +104,8 @@ fn model_error_message(e: ModelError) -> String {
     }
 }
 
-/// 取当前激活 profile 与对应密钥，供对话 / 连接测试 / 文件分析共用
-fn active_profile_with_key(state: &ChatState) -> Result<(ApiProfile, String), String> {
+/// 取当前激活 profile 与对应密钥，供对话 / 连接测试 / 文件分析 / Agent 共用
+pub(crate) fn active_profile_with_key(state: &ChatState) -> Result<(ApiProfile, String), String> {
     let cfg = state.config.lock().unwrap();
     let profile = cfg
         .profiles
@@ -551,6 +551,49 @@ pub fn quota_secret_delete(state: State<'_, ChatState>, provider_id: String) -> 
         .secrets
         .delete(&format!("{QUOTA_KEY_PREFIX}{provider_id}"))
         .map_err(|e| e.to_string())
+}
+
+// ——— 会话附件：解析文件为文本（复用轻析解析器） ———
+
+const CHAT_ATTACH_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const CHAT_ATTACH_MAX_CHARS: usize = 8000;
+
+/// 读取并解析文件为文本，供对话附件使用。支持解析器覆盖的全部格式
+/// （pdf/docx/xlsx/txt/md/csv/json/代码文件等），内容截断至 8000 字符。
+#[tauri::command]
+pub fn chat_read_file(path: String) -> Result<serde_json::Value, String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() {
+        return Err("文件不存在或不是普通文件".into());
+    }
+    let meta = std::fs::metadata(p).map_err(|e| format!("读取文件信息失败：{e}"))?;
+    if meta.len() > CHAT_ATTACH_MAX_BYTES {
+        return Err("文件超过 20MB，无法作为会话附件".into());
+    }
+    let registry = liteai_parsers::default_registry();
+    let parser = registry
+        .get(p)
+        .ok_or_else(|| "该文件类型不支持作为附件（支持 pdf / docx / xlsx / txt / md / csv / json / 代码文件等文本格式）".to_string())?;
+    let doc = parser.parse(p).map_err(|e| format!("解析失败：{e}"))?;
+    if doc.text.trim().is_empty() {
+        return Err("未能从文件中提取到文本（可能是扫描版 PDF 或空文件）".into());
+    }
+    let mut text = doc.text;
+    let mut truncated = doc.truncated;
+    if text.chars().count() > CHAT_ATTACH_MAX_CHARS {
+        text = text.chars().take(CHAT_ATTACH_MAX_CHARS).collect();
+        truncated = true;
+    }
+    let name = p
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Ok(serde_json::json!({
+        "name": name,
+        "content": text,
+        "chars": text.chars().count(),
+        "truncated": truncated,
+    }))
 }
 
 // ——— 后端定时刷新调度（时钟在 Rust 常驻线程） ———

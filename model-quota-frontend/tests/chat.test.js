@@ -120,6 +120,47 @@ describe('多会话存储', () => {
   });
 });
 
+describe('附件组装与历史裁剪', () => {
+  const att = [
+    { name: 'report.pdf', content: 'A'.repeat(50), truncated: false },
+    { name: 'data.csv', content: 'B'.repeat(30), truncated: true },
+  ];
+
+  it('最后一条用户消息携带完整附件内容', () => {
+    const history = [
+      { role: 'user', content: '第一轮', attachments: att },
+      { role: 'assistant', content: '好的' },
+      { role: 'user', content: '再帮我看一次', attachments: att },
+    ];
+    const out = buildOutgoingMessages(history, null);
+    const last = out.at(-1);
+    expect(last.content).toContain('再帮我看一次');
+    expect(last.content).toContain('【附件文件：report.pdf】');
+    expect(last.content).toContain('，内容超长已截断】');
+    expect(last.content).toContain('A'.repeat(50));
+    // 更早轮次的同一附件被省略正文
+    expect(out[0].content).toContain('【附件：report.pdf（内容已省略）】');
+    expect(out[0].content).not.toContain('AAAA');
+  });
+
+  it('历史轮次的附件只保留占位，不再携带正文', () => {
+    const history = [
+      { role: 'user', content: '看看这个文件', attachments: att },
+      { role: 'assistant', content: '好的' },
+      { role: 'user', content: '继续' },
+    ];
+    const out = buildOutgoingMessages(history, null);
+    expect(out[0].content).toContain('【附件：report.pdf（内容已省略）】');
+    expect(out[0].content).not.toContain('AAAA');
+    expect(out.at(-1).content).toBe('继续');
+  });
+
+  it('无附件消息不受影响', () => {
+    const out = buildOutgoingMessages([{ role: 'user', content: 'hi' }], null);
+    expect(out).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+});
+
 describe('额度上下文注入', () => {
   it('无供应商返回 null', () => {
     expect(buildQuotaContext([])).toBeNull();
