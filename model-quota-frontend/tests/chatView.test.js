@@ -132,3 +132,33 @@ describe('chatView 会话附件', () => {
     expect(localStorage.getItem('mqc.chat.agent')).toBe('0');
   });
 });
+
+describe('chatView ⚡ 只读自动批准开关', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.body.innerHTML = '';
+  });
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  it('Agent 模式开启时才显示；切换持久化', async () => {
+    stubTauri();
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-agent-toggle"]')).toBeTruthy());
+
+    const ro = root.querySelector('[data-role="agent-readonly-toggle"]');
+    expect(ro.hidden).toBe(true); // Agent 未开时隐藏
+    root.querySelector('[data-role="chat-agent-toggle"]').click();
+    expect(ro.hidden).toBe(false);
+    expect(ro.classList.contains('active')).toBe(false);
+
+    ro.click();
+    expect(ro.classList.contains('active')).toBe(true);
+    expect(localStorage.getItem('mqc.chat.agentAutoReadonly')).toBe('1');
+    ro.click();
+    expect(localStorage.getItem('mqc.chat.agentAutoReadonly')).toBe('0');
+  });
+});

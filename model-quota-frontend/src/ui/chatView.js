@@ -8,7 +8,7 @@ import {
   buildProfileFromProvider, importableProviders,
   isChatAvailable, getChatConfig, saveChatConfig, setChatKey, hasChatKey,
   deleteChatKey, testChatConnection, sendChat, cancelChat,
-  readChatFile, agentSend, agentResolve, cancelAgent,
+  readChatFile, agentSend, agentResolve, cancelAgent, isReadonlyTool,
 } from '../core/chat.js';
 import { readSecret } from '../core/secrets.js';
 import { escapeHtml } from './format.js';
@@ -33,6 +33,9 @@ export function mountChatPage(el, { repo }) {
   let attachments = [];
   // Agent 模式：模型可提议系统工具，逐个经确认卡片批准执行
   let agentMode = localStorage.getItem('mqc.chat.agent') === '1';
+  // ⚡ 只读工具自动批准（默认关）：开启后只读类调用跳过确认卡（仍落审计日志）
+  let autoReadonly = localStorage.getItem('mqc.chat.agentAutoReadonly') === '1';
+  let chainApproved = false; // 多步自主：本任务内后续工具调用不再确认
   let agentRunning = false;
   let agentLive = [];   // 运行中的工具卡片（挂起的提议/已执行结果），不入会话
   let agentHandlers = null;
@@ -93,6 +96,7 @@ export function mountChatPage(el, { repo }) {
       <div class="chat-input-actions">
         <button class="btn" data-role="chat-attach" title="附加文件（pdf / docx / xlsx / txt / csv / json / 代码等文本类）">📎</button>
         <button class="btn agent-toggle${agentMode ? ' active' : ''}" data-role="chat-agent-toggle" title="Agent 模式：AI 可调用系统工具（每次执行都需你批准）">🔧 Agent</button>
+        <button class="btn agent-toggle${autoReadonly ? ' active' : ''}" data-role="agent-readonly-toggle" title="只读工具自动批准：时间/系统信息/列目录/读文件不再弹确认卡（仍记录审计日志）"${agentMode ? '' : ' hidden'}>⚡ 只读自动批准</button>
         <button class="btn primary" data-role="chat-send">发送</button>
         <button class="btn" data-role="chat-stop" hidden>停止</button>
       </div>
@@ -153,7 +157,7 @@ export function mountChatPage(el, { repo }) {
     if (m.tool) {
       const t = m.tool;
       return `<div class="chat-tool-card${t.ok ? '' : ' fail'}${t.danger ? ' danger' : ''}">
-        <div class="chat-tool-head">🔧 ${escapeHtml(t.name)} <span class="chat-tool-status">${t.ok ? '✓ 已执行' : '✗ 失败/拒绝'}</span></div>
+        <div class="chat-tool-head">🔧 ${escapeHtml(t.name)} <span class="chat-tool-status">${t.ok ? '✓ 已执行' : '✗ 失败/拒绝'}${t.auto ? ' ⚡' : ''}</span></div>
         ${t.output ? `<pre class="chat-tool-out">${escapeHtml(String(t.output).slice(0, 600))}</pre>` : ''}
       </div>`;
     }
@@ -173,6 +177,7 @@ export function mountChatPage(el, { repo }) {
       <pre class="chat-tool-out">${escapeHtml(argsShort)}</pre>
       <div class="chat-tool-actions">
         <button class="btn primary" data-role="agent-approve">批准执行</button>
+        <button class="btn primary" data-role="agent-chain" title="批准本任务后续全部工具调用（多步自主，仍受 8 步上限与取消约束）">⚡ 批准整条链</button>
         <button class="btn danger" data-role="agent-deny">拒绝</button>
       </div>
     </div>`;
@@ -278,6 +283,7 @@ ${attachmentsToText(pendingAttachments)}` : text,
     if (agentMode) {
       agentRunning = true;
       agentLive = [];
+      chainApproved = false;
       agentHandlers = makeAgentHandlers();
       await agentSend(outgoing, agentHandlers);
       return;
@@ -305,6 +311,11 @@ ${attachmentsToText(pendingAttachments)}` : text,
   function makeAgentHandlers() {
     return {
       onToolProposed: (data) => {
+        // ⚡ 只读自动批准：跳过确认卡直接放行（审计 auto=true）
+        if (autoReadonly && isReadonlyTool(data.name)) {
+          void agentResolve(true, makeAgentHandlers(), { auto: true });
+          return;
+        }
         agentLive = [{ kind: 'proposed', done: false, ...data }];
         renderMessages();
       },
@@ -314,7 +325,7 @@ ${attachmentsToText(pendingAttachments)}` : text,
         ({ sessions, activeId } = appendToSession(sessions, activeId, {
           role: 'assistant',
           content: '',
-          tool: { name: data.name, ok: !!data.ok, output: String(data.output || ''), danger: !!data.danger },
+          tool: { name: data.name, ok: !!data.ok, output: String(data.output || ''), danger: !!data.danger, auto: !!data.auto },
           time: Date.now(),
         }));
         syncMessages();
@@ -330,6 +341,7 @@ ${attachmentsToText(pendingAttachments)}` : text,
     syncMessages();
     agentLive = [];
     agentRunning = false;
+    chainApproved = false;
     agentHandlers = null;
     setStreaming(false);
     emitChatStatus(error ? 'error' : 'replied');
@@ -391,10 +403,17 @@ ${attachmentsToText(pendingAttachments)}` : text,
       agentMode = !agentMode;
       localStorage.setItem('mqc.chat.agent', agentMode ? '1' : '0');
       btn.classList.toggle('active', agentMode);
-    } else if (role === 'agent-approve' || role === 'agent-deny') {
+      const ro = $('[data-role="agent-readonly-toggle"]');
+      if (ro) ro.hidden = !agentMode;
+    } else if (role === 'agent-approve' || role === 'agent-deny' || role === 'agent-chain') {
       if (!agentRunning || !agentHandlers) return;
       el.querySelectorAll('.chat-tool-actions button').forEach((b) => (b.disabled = true));
-      await agentResolve(role === 'agent-approve', agentHandlers);
+      if (role === 'agent-chain') chainApproved = true;
+      await agentResolve(role !== 'agent-deny', agentHandlers, { approveChain: role === 'agent-chain' });
+    } else if (role === 'agent-readonly-toggle') {
+      autoReadonly = !autoReadonly;
+      localStorage.setItem('mqc.chat.agentAutoReadonly', autoReadonly ? '1' : '0');
+      btn.classList.toggle('active', autoReadonly);
     } else if (role === 'chat-clear') {
       ({ sessions, activeId } = clearActiveMessages(sessions, activeId));
       syncMessages();

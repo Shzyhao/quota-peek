@@ -1,7 +1,7 @@
 {
   "name": "model-quota-desktop",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "桌看（原：看额度）- Tauri 2 桌宠壳，前端复用 model-quota-frontend",
   "scripts": {
     "tauri": "tauri",

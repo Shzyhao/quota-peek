@@ -35,7 +35,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum AgentEvent {
     ToolProposed { call_id: String, name: String, args: Value, danger: bool },
-    ToolResult { call_id: String, name: String, ok: bool, output: String, duration_ms: u64 },
+    ToolResult { call_id: String, name: String, ok: bool, output: String, duration_ms: u64, auto: bool },
     Done { text: String },
     Error { message: String },
 }
@@ -53,6 +53,8 @@ pub struct AgentState {
     pub running: AtomicBool,
     pub cancel: AtomicBool,
     pub steps: AtomicU32,
+    /// 多步自主模式：本任务内后续工具调用不再逐个确认（用户批准整条链后置位；新任务重置）
+    pub chain_approved: AtomicBool,
     /// 进行中的对话（OpenAI messages 格式，含工具消息；[0] 为 agent 系统提示）
     pub messages: Mutex<Vec<Value>>,
     pub pending: Mutex<Option<PendingCall>>,
@@ -284,7 +286,8 @@ async fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
 
 // ——— 审计日志 ———
 
-fn audit(app: &AppHandle, tool: &str, args: &Value, approved: bool, ok: bool, duration_ms: u128, output: &str) {
+#[allow(clippy::too_many_arguments)]
+fn audit(app: &AppHandle, tool: &str, args: &Value, approved: bool, auto: bool, ok: bool, duration_ms: u128, output: &str) {
     let Ok(dir) = app.path().app_config_dir() else { return };
     let path = dir.join("agent-audit.jsonl");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
@@ -294,6 +297,7 @@ fn audit(app: &AppHandle, tool: &str, args: &Value, approved: bool, ok: bool, du
             "tool": tool,
             "args": args,
             "approved": approved,
+            "auto": auto,
             "ok": ok,
             "duration_ms": duration_ms as u64,
             "output_preview": output.chars().take(200).collect::<String>(),
@@ -359,6 +363,7 @@ impl AgentClient {
 const AGENT_SYSTEM: &str = "你是桌看 Agent，可以调用工具帮用户完成系统操作。调用工具前先用一句话（同一条回复的文字部分）说明你要做什么；工具需要用户批准才会执行。全程用中文，回答简洁。";
 
 async fn run_loop(
+    app: &AppHandle,
     agent: &AgentState,
     client: &AgentClient,
     events: &Channel<AgentEvent>,
@@ -411,6 +416,33 @@ async fn run_loop(
 
         agent.messages.lock().unwrap().push(message.clone());
 
+        // 多步自主模式：本任务内不再挂起，直接执行并继续
+        if agent.chain_approved.load(Ordering::SeqCst) {
+            let start = Instant::now();
+            let result = execute_tool(&name, &args).await;
+            let duration = start.elapsed().as_millis();
+            let (ok, output) = match result {
+                Ok(out) => (true, out),
+                Err(e) => (false, e),
+            };
+            audit(app, &name, &args, true, true, ok, duration, &output);
+            let _ = events.send(AgentEvent::ToolResult {
+                call_id: call_id.clone(),
+                name: name.clone(),
+                ok,
+                output: output.clone(),
+                duration_ms: duration as u64,
+                auto: true,
+            });
+            agent.messages.lock().unwrap().push(json!({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": output,
+            }));
+            agent.steps.fetch_add(1, Ordering::SeqCst);
+            continue;
+        }
+
         if !valid_tool(&name) {
             // 模型幻觉出的工具：以工具结果形式拒绝并继续，不打断会话
             agent.messages.lock().unwrap().push(json!({
@@ -451,6 +483,7 @@ async fn run_loop(
 /// 发起 Agent 任务：事件经 Channel 推送；模型提出工具调用时挂起，等 agent_resolve。
 #[tauri::command]
 pub async fn agent_send(
+    app: AppHandle,
     chat: State<'_, ChatState>,
     agent: State<'_, AgentState>,
     messages: Vec<Value>,
@@ -464,6 +497,7 @@ pub async fn agent_send(
         *agent.pending.lock().unwrap() = None;
         agent.cancel.store(false, Ordering::SeqCst);
         agent.steps.store(0, Ordering::SeqCst);
+        agent.chain_approved.store(false, Ordering::SeqCst);
         let mut msgs = vec![json!({ "role": "system", "content": AGENT_SYSTEM })];
         msgs.extend(messages);
         *agent.messages.lock().unwrap() = msgs;
@@ -476,7 +510,7 @@ pub async fn agent_send(
     let (profile, key) = crate::commands::active_profile_with_key(&chat)?;
     let client = AgentClient::new(key, profile.base_url.clone(), profile.model.clone());
 
-    let result = run_loop(&agent, &client, &on_event).await;
+    let result = run_loop(&app, &agent, &client, &on_event).await;
     // 挂起（存在待确认调用）时保持 running=true，由 agent_resolve 继续；其余情况复位
     if agent.pending.lock().unwrap().is_none() {
         agent.running.store(false, Ordering::SeqCst);
@@ -491,6 +525,8 @@ pub async fn agent_resolve(
     chat: State<'_, ChatState>,
     agent: State<'_, AgentState>,
     approved: bool,
+    approve_chain: Option<bool>,
+    auto: Option<bool>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
     if !agent.running.load(Ordering::SeqCst) {
@@ -500,6 +536,11 @@ pub async fn agent_resolve(
         agent.running.store(false, Ordering::SeqCst);
         return Err("没有待确认的工具调用".into());
     };
+    // 「批准整条链」：本任务内后续工具调用直接执行（仍受步数上限与取消约束）
+    if approve_chain.unwrap_or(false) {
+        agent.chain_approved.store(true, Ordering::SeqCst);
+    }
+    let auto_flag = auto.unwrap_or(false) || approve_chain.unwrap_or(false);
 
     if approved {
         let start = Instant::now();
@@ -509,13 +550,14 @@ pub async fn agent_resolve(
             Ok(out) => (true, out),
             Err(e) => (false, e),
         };
-        audit(&app, &pending.name, &pending.args, true, ok, duration, &output);
+        audit(&app, &pending.name, &pending.args, true, auto_flag, ok, duration, &output);
         let _ = on_event.send(AgentEvent::ToolResult {
             call_id: pending.id.clone(),
             name: pending.name.clone(),
             ok,
             output: output.clone(),
             duration_ms: duration as u64,
+            auto: auto_flag,
         });
         agent.messages.lock().unwrap().push(json!({
             "role": "tool",
@@ -524,13 +566,14 @@ pub async fn agent_resolve(
         }));
         agent.steps.fetch_add(1, Ordering::SeqCst);
     } else {
-        audit(&app, &pending.name, &pending.args, false, false, 0, "（用户拒绝）");
+        audit(&app, &pending.name, &pending.args, false, false, false, 0, "（用户拒绝）");
         let _ = on_event.send(AgentEvent::ToolResult {
             call_id: pending.id.clone(),
             name: pending.name.clone(),
             ok: false,
             output: "（用户已拒绝）".into(),
             duration_ms: 0,
+            auto: false,
         });
         agent.messages.lock().unwrap().push(json!({
             "role": "tool",
@@ -542,7 +585,7 @@ pub async fn agent_resolve(
     let (profile, key) = crate::commands::active_profile_with_key(&chat)?;
     let client = AgentClient::new(key, profile.base_url.clone(), profile.model.clone());
 
-    let result = run_loop(&agent, &client, &on_event).await;
+    let result = run_loop(&app, &agent, &client, &on_event).await;
     if agent.pending.lock().unwrap().is_none() {
         agent.running.store(false, Ordering::SeqCst);
     }

@@ -4,7 +4,7 @@ import {
   newSession, titleFromText, migrateLegacyHistory,
   MAX_SESSIONS, HISTORY_LIMIT,
   buildQuotaContext, buildOutgoingMessages,
-  buildProfileFromProvider, importableProviders,
+  buildProfileFromProvider, importableProviders, isReadonlyTool,
 } from '../src/core/chat.js';
 
 // 内存版 storage 桩（不依赖 jsdom localStorage 状态残留）
@@ -158,6 +158,17 @@ describe('附件组装与历史裁剪', () => {
   it('无附件消息不受影响', () => {
     const out = buildOutgoingMessages([{ role: 'user', content: 'hi' }], null);
     expect(out).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+});
+
+describe('isReadonlyTool（⚡ 只读自动批准范围）', () => {
+  it('只读四类为 true，写操作/执行类为 false', () => {
+    for (const n of ['get_current_time', 'get_system_info', 'list_directory', 'read_text_file']) {
+      expect(isReadonlyTool(n)).toBe(true);
+    }
+    for (const n of ['open_url', 'open_path', 'write_clipboard', 'write_text_file', 'run_command']) {
+      expect(isReadonlyTool(n)).toBe(false);
+    }
   });
 });
 

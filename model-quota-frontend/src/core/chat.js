@@ -312,7 +312,9 @@ export function agentSend(messages, { onToolProposed, onToolResult, onDone, onEr
 }
 
 /// 对挂起的工具调用作出决定（批准/拒绝），续跑循环；回调同 agentSend。
-export function agentResolve(approved, handlers = {}) {
+/// options.approveChain：批准本任务后续全部工具调用（多步自主，Rust 直接执行不再挂起）；
+/// options.auto：本次由「只读自动批准」设置触发（审计标记 auto=true）。
+export function agentResolve(approved, handlers = {}, { approveChain = false, auto = false } = {}) {
   const core = tauriCore();
   if (!core?.invoke || !core.Channel) return Promise.reject(new Error('仅桌面版支持 Agent'));
   return new Promise((resolve) => {
@@ -324,7 +326,7 @@ export function agentResolve(approved, handlers = {}) {
       else if (ev.type === 'done') { handlers.onDone?.(ev.data?.text ?? ''); resolve(); }
       else if (ev.type === 'error') { handlers.onError?.(ev.data?.message ?? '请求失败'); resolve(); }
     };
-    invoke('agent_resolve', { approved, onEvent: channel }).catch((e) => {
+    invoke('agent_resolve', { approved, approveChain, auto, onEvent: channel }).catch((e) => {
       handlers.onError?.(String(e?.message || e));
       resolve();
     });
@@ -333,4 +335,10 @@ export function agentResolve(approved, handlers = {}) {
 
 export function cancelAgent() {
   return invoke('agent_cancel');
+}
+
+/// 只读工具（无系统副作用）：开启「⚡ 只读自动批准」后这类调用跳过确认卡。
+/// 注意 read_text_file 有隐私属性，但执行仍全程落审计日志。
+export function isReadonlyTool(name) {
+  return ['get_current_time', 'get_system_info', 'list_directory', 'read_text_file'].includes(name);
 }
