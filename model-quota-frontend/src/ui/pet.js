@@ -72,6 +72,7 @@ export async function renderPet({ root }) {
     const customs = listCustomModels();
     const activeCustom = getActiveCustom();
     menu.innerHTML = `
+      <button class="pet-menu-close" data-menu="close" aria-label="关闭菜单">×</button>
       <button data-menu="chat">💬 对话</button>
       <button data-menu="analysis">📄 文件分析</button>
       <button data-menu="quota">📊 额度速览</button>
@@ -109,7 +110,8 @@ export async function renderPet({ root }) {
     }
     const act = e.target.closest('[data-menu]')?.dataset.menu;
     if (!act) return;
-    if (act === 'skins') cycleSkin();
+    if (act === 'close') hideMenu();
+    else if (act === 'skins') cycleSkin();
     else if (act === 'chat') { hideMenu(); emitTauri('pet-panel', 'chat'); playPetMotion(); }
     else if (act === 'analysis') { hideMenu(); emitTauri('pet-panel', 'analysis'); }
     else if (act === 'quota') { hideMenu(); emitTauri('ball-clicked'); }
