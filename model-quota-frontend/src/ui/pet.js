@@ -11,7 +11,7 @@
 import { analyzeFiles, isAnalysisAvailable } from '../core/analysis.js';
 import { escapeHtml } from './format.js';
 import {
-  SKINS, SKIN_KEY, currentSkin, modelUrlFor, activeModelUrl, activeRuntime,
+  SKINS, SKIN_KEY, currentSkin, activeModelUrl, activeRuntime,
   getActiveCustom, setActiveCustom, clearActiveCustom, listCustomModels,
   loadRuntimeScript,
 } from './live2d.js';
@@ -65,10 +65,10 @@ export async function renderPet({ root }) {
   // 气泡上点击 = 关闭
   bubble.addEventListener('click', hideBubble);
 
-  // ——— 功能气泡菜单（点击桌宠弹出）：功能区 + 形象列表单视图自适应展示 ———
+  // ——— 功能气泡菜单（点击桌宠弹出）：功能入口 + 自定义形象（如有） ———
+  // 内置 20 套皮肤不内联展示，换装走「下一套」循环与设置页下拉
 
   function renderMenu() {
-    const cur = currentSkin();
     const customs = listCustomModels();
     const activeCustom = getActiveCustom();
     menu.innerHTML = `
@@ -79,11 +79,7 @@ export async function renderPet({ root }) {
       ${customs.length ? `<div class="pet-skin-section">我的形象</div>
       <div class="pet-skin-grid">
         ${customs.map((c) => `<button data-custom="${escapeHtml(c.id)}" class="${activeCustom?.id === c.id ? 'cur' : ''}">${escapeHtml(c.name)}</button>`).join('')}
-      </div>` : ''}
-      <div class="pet-skin-section">内置皮肤 · 22 娘</div>
-      <div class="pet-skin-grid">
-        ${SKINS.map((s) => `<button data-skin="${s.id}" class="${!activeCustom && s.id === cur ? 'cur' : ''}">${s.label}</button>`).join('')}
-      </div>`;
+      </div>` : ''}`;
   }
 
   function showMenu() {
