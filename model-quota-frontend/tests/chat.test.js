@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  loadHistory, saveHistory, clearHistory, buildQuotaContext, buildOutgoingMessages,
+  loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession,
+  newSession, titleFromText, migrateLegacyHistory,
+  MAX_SESSIONS, HISTORY_LIMIT,
+  buildQuotaContext, buildOutgoingMessages,
   buildProfileFromProvider, importableProviders,
 } from '../src/core/chat.js';
 
@@ -14,31 +17,106 @@ function memoryStorage() {
   };
 }
 
-describe('会话存储', () => {
-  it('空存储返回空数组', () => {
-    expect(loadHistory(memoryStorage())).toEqual([]);
+describe('多会话存储', () => {
+  it('空存储返回空列表与空 activeId', () => {
+    expect(loadSessions(memoryStorage())).toEqual({ sessions: [], activeId: null });
   });
 
-  it('损坏 JSON 返回空数组而不抛错', () => {
+  it('损坏 JSON 不抛错，按空处理', () => {
     const s = memoryStorage();
-    s.setItem('mqc.chat.messages', '{oops');
-    expect(loadHistory(s)).toEqual([]);
+    s.setItem('mqc.chat.sessions', '{oops');
+    expect(loadSessions(s).sessions).toEqual([]);
   });
 
-  it('保存超过上限只留最近 100 条', () => {
+  it('旧版单会话缓冲自动迁移为 sessions 结构并移除旧键', () => {
     const s = memoryStorage();
-    const msgs = Array.from({ length: 130 }, (_, i) => ({ role: 'user', content: `m${i}` }));
-    const saved = saveHistory(msgs, s);
-    expect(saved).toHaveLength(100);
-    expect(saved[0].content).toBe('m30');
-    expect(loadHistory(s)).toHaveLength(100);
+    s.setItem('mqc.chat.messages', JSON.stringify([
+      { role: 'user', content: '帮我看看额度' },
+      { role: 'assistant', content: '好的' },
+    ]));
+    expect(migrateLegacyHistory(s)).toBe(true);
+    const { sessions, activeId } = loadSessions(s);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].title).toBe('帮我看看额度');
+    expect(sessions[0].messages).toHaveLength(2);
+    expect(activeId).toBe(sessions[0].id);
+    expect(s.getItem('mqc.chat.messages')).toBeNull();
   });
 
-  it('clearHistory 清空', () => {
+  it('追加消息维护标题、时间戳与 100 条上限', () => {
     const s = memoryStorage();
-    saveHistory([{ role: 'user', content: 'hi' }], s);
-    clearHistory(s);
-    expect(loadHistory(s)).toEqual([]);
+    let { sessions, activeId } = loadSessions(s);
+    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'user', content: '帮我看看今天的额度用量如何', time: 1000 }, s));
+    let active = sessions.find((x) => x.id === activeId);
+    expect(active.title).toBe('帮我看看今天的额度用量如何');
+    expect(active.updatedAt).toBe(1000);
+    const bulk = Array.from({ length: HISTORY_LIMIT + 20 }, (_, i) => ({ role: 'assistant', content: `m${i}`, time: 2000 + i }));
+    for (const m of bulk) ({ sessions, activeId } = appendToSession(sessions, activeId, m, s));
+    active = sessions.find((x) => x.id === activeId);
+    expect(active.messages).toHaveLength(HISTORY_LIMIT);
+    expect(active.messages[0].content).toBe('m20');
+  });
+
+  it('会话数超过上限按最近活跃淘汰最旧', () => {
+    const s = memoryStorage();
+    let state = { sessions: [], activeId: null };
+    for (let i = 0; i < MAX_SESSIONS + 2; i++) {
+      const fresh = newSession(1000 + i);
+      fresh.title = `会话${i}`;
+      fresh.updatedAt = 1000 + i;
+      state = saveSessions([fresh, ...state.sessions], fresh.id, s);
+    }
+    expect(state.sessions).toHaveLength(MAX_SESSIONS);
+    expect(state.sessions.map((x) => x.title)).not.toContain('会话0');
+    expect(state.sessions[0].title).toBe('会话11');
+  });
+
+  it('saveSessions 持久化 activeId，失效时回退最近会话', () => {
+    const s = memoryStorage();
+    const a = newSession(1);
+    const b = newSession(2);
+    let { sessions, activeId } = saveSessions([a, b], a.id, s);
+    expect(activeId).toBe(a.id);
+    ({ sessions, activeId } = saveSessions(sessions, 'no-such-id', s));
+    expect(activeId).toBe(b.id); // b.updatedAt 更新（同 createdAt 时后创建的排前？此处按列表稳定排序回退首个）
+  });
+
+  it('deleteSession 删除指定会话，删空自动补新会话', () => {
+    const s = memoryStorage();
+    const a = newSession(1);
+    a.title = 'A';
+    const b = newSession(2);
+    b.title = 'B';
+    let { sessions, activeId } = saveSessions([a, b], a.id, s);
+    ({ sessions, activeId } = deleteSession(sessions, activeId, a.id, s));
+    expect(sessions.map((x) => x.title)).toEqual(['B']);
+    expect(activeId).toBe(b.id);
+    ({ sessions } = deleteSession(sessions, activeId, b.id, s));
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].title).toBe('新的对话');
+  });
+
+  it('clearActiveMessages 清空消息并重置标题，保留会话', () => {
+    const s = memoryStorage();
+    let { sessions, activeId } = loadSessions(s);
+    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'user', content: 'hello world', time: 1 }, s));
+    ({ sessions, activeId } = clearActiveMessages(sessions, activeId, s));
+    const active = sessions.find((x) => x.id === activeId);
+    expect(active.messages).toEqual([]);
+    expect(active.title).toBe('新的对话');
+  });
+
+  it('appendToSession 无匹配会话时自动新建', () => {
+    const s = memoryStorage();
+    const { sessions, activeId } = appendToSession([], 'ghost', { role: 'user', content: 'hi', time: 5 }, s);
+    expect(sessions).toHaveLength(1);
+    expect(activeId).toBe(sessions[0].id);
+  });
+
+  it('titleFromText 压缩空白并截断', () => {
+    expect(titleFromText('  a \n b  ')).toBe('a b');
+    expect(titleFromText('x'.repeat(30))).toHaveLength(19); // 18 + 省略号
+    expect(titleFromText('')).toBe('新的对话');
   });
 });
 

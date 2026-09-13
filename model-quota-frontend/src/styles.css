@@ -1913,6 +1913,22 @@ html.pet-mode #app {
   animation: pet-bubble-in 0.18s var(--ease);
 }
 
+/* 对话状态气泡的「思考中」点点 */
+.pet-dots {
+  letter-spacing: 3px;
+}
+.pet-dots i {
+  font-style: normal;
+  font-weight: bold;
+  animation: pet-dot-blink 1.2s infinite;
+}
+.pet-dots i:nth-child(2) { animation-delay: 0.2s; }
+.pet-dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes pet-dot-blink {
+  0%, 60%, 100% { opacity: 0.25; }
+  30% { opacity: 1; }
+}
+
 @keyframes pet-bubble-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }

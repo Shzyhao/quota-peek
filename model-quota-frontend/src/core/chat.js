@@ -1,35 +1,132 @@
-// 桌宠 AI 对话核心：会话存储 + Tauri 命令封装 + 额度上下文注入 + 供应商联动。
+// 桌宠 AI 对话核心：多会话存储 + Tauri 命令封装 + 额度上下文注入 + 供应商联动。
 // 纯逻辑与 IPC 分离（invoke/channel 由调用方注入），便于单测与网页版降级。
 
 import { getProviderType } from './providers.js';
 
-const HISTORY_KEY = 'mqc.chat.messages';
-const HISTORY_LIMIT = 100; // 存储上限：最近 100 条（含 user/assistant）
+const SESSIONS_KEY = 'mqc.chat.sessions';
+const ACTIVE_KEY = 'mqc.chat.activeSession';
+const LEGACY_MESSAGES_KEY = 'mqc.chat.messages';
+export const HISTORY_LIMIT = 100; // 每个会话保留的消息条数（含 user/assistant）
+export const MAX_SESSIONS = 10;   // 会话数上限，超出按最近活跃淘汰最旧
 
-// ——— 会话存储（localStorage，与额度数据同域共享给桌宠窗） ———
-
-export function loadHistory(storage = globalThis.localStorage) {
+function readJson(storage, key, fallback) {
   try {
-    const raw = storage?.getItem(HISTORY_KEY);
-    const list = raw ? JSON.parse(raw) : [];
-    return Array.isArray(list) ? list : [];
+    const raw = storage?.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : fallback;
+    return parsed ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
 }
 
-export function saveHistory(messages, storage = globalThis.localStorage) {
-  const trimmed = messages.slice(-HISTORY_LIMIT);
+function writeJson(storage, key, value) {
   try {
-    storage?.setItem(HISTORY_KEY, JSON.stringify(trimmed));
+    storage?.setItem(key, JSON.stringify(value));
   } catch {
     /* 存储满等异常静默：会话是临时数据 */
   }
-  return trimmed;
 }
 
-export function clearHistory(storage = globalThis.localStorage) {
-  storage?.removeItem(HISTORY_KEY);
+// ——— 多会话存储（localStorage，与额度数据同域共享给桌宠窗） ———
+
+export function newSession(now = Date.now()) {
+  return {
+    id: `s-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    title: '新的对话',
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  };
+}
+
+// 会话标题取首条用户消息截断
+export function titleFromText(text, max = 18) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '新的对话';
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
+
+// 一次性迁移：旧版单会话缓冲（mqc.chat.messages）→ sessions 结构
+export function migrateLegacyHistory(storage = globalThis.localStorage) {
+  const legacy = readJson(storage, LEGACY_MESSAGES_KEY, null);
+  if (!Array.isArray(legacy) || !legacy.length) return false;
+  const firstUser = legacy.find((m) => m.role === 'user');
+  const lastTime = legacy[legacy.length - 1]?.time || Date.now();
+  const session = {
+    ...newSession(lastTime),
+    title: titleFromText(firstUser?.content),
+    messages: legacy.slice(-HISTORY_LIMIT),
+  };
+  writeJson(storage, SESSIONS_KEY, [session]);
+  writeJson(storage, ACTIVE_KEY, session.id);
+  storage?.removeItem(LEGACY_MESSAGES_KEY);
+  return true;
+}
+
+// 读取会话列表与当前会话 id（activeId 失效时回退最近会话）
+export function loadSessions(storage = globalThis.localStorage) {
+  migrateLegacyHistory(storage);
+  const list = readJson(storage, SESSIONS_KEY, []);
+  const sessions = Array.isArray(list) ? list : [];
+  const activeId = readJson(storage, ACTIVE_KEY, null);
+  return {
+    sessions,
+    activeId: sessions.some((s) => s.id === activeId) ? activeId : sessions[0]?.id ?? null,
+  };
+}
+
+// 持久化：按最近活跃排序并裁剪到上限；activeId 不在列表时回退最近会话
+export function saveSessions(sessions, activeId, storage = globalThis.localStorage) {
+  const sorted = [...(Array.isArray(sessions) ? sessions : [])]
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .slice(0, MAX_SESSIONS);
+  const nextActive = sorted.some((s) => s.id === activeId) ? activeId : sorted[0]?.id ?? null;
+  writeJson(storage, SESSIONS_KEY, sorted);
+  writeJson(storage, ACTIVE_KEY, nextActive);
+  return { sessions: sorted, activeId: nextActive };
+}
+
+// 向当前会话追加消息：维护 updatedAt、超过上限裁剪旧消息、首条用户消息自动命名
+export function appendToSession(sessions, activeId, message, storage = globalThis.localStorage) {
+  const now = message.time || Date.now();
+  let list = Array.isArray(sessions) ? [...sessions] : [];
+  const idx = list.findIndex((s) => s.id === activeId);
+  if (idx < 0) {
+    list.unshift({
+      ...newSession(now),
+      title: message.role === 'user' ? titleFromText(message.content) : '新的对话',
+      messages: [message],
+    });
+  } else {
+    const s = list[idx];
+    const isFirstUser = s.title === '新的对话' && message.role === 'user';
+    list[idx] = {
+      ...s,
+      title: isFirstUser ? titleFromText(message.content) : s.title,
+      updatedAt: now,
+      messages: [...s.messages, message].slice(-HISTORY_LIMIT),
+    };
+  }
+  return saveSessions(list, idx < 0 ? list[0].id : activeId, storage);
+}
+
+// 清空当前会话的消息（保留会话本身）
+export function clearActiveMessages(sessions, activeId, storage = globalThis.localStorage) {
+  const now = Date.now();
+  const list = (Array.isArray(sessions) ? sessions : []).map((s) =>
+    s.id === activeId ? { ...s, title: '新的对话', updatedAt: now, messages: [] } : s,
+  );
+  return saveSessions(list, activeId, storage);
+}
+
+// 删除指定会话；删空时自动补一个新会话，activeId 落到最近会话
+export function deleteSession(sessions, activeId, id, storage = globalThis.localStorage) {
+  const rest = (Array.isArray(sessions) ? sessions : []).filter((s) => s.id !== id);
+  if (!rest.length) {
+    const fresh = newSession();
+    return saveSessions([fresh], fresh.id, storage);
+  }
+  return saveSessions(rest, activeId === id ? null : activeId, storage);
 }
 
 // ——— 额度供应商 → 对话模型联动 ———

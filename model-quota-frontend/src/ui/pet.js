@@ -9,6 +9,7 @@
 // 全部走动态 import（也让 main/mini/ball 窗口不必背上 pixi 的体积）。
 
 import { analyzeFiles, isAnalysisAvailable } from '../core/analysis.js';
+import { pickChatterLine } from '../core/chatter.js';
 import { escapeHtml } from './format.js';
 import {
   SKINS, SKIN_KEY, currentSkin, activeModelUrl, activeRuntime,
@@ -31,7 +32,7 @@ const BUBBLE_LINGER_MS = 8000;
 
 const emitTauri = (event, payload) => globalThis.__TAURI__?.event?.emit?.(event, payload);
 
-export async function renderPet({ root }) {
+export async function renderPet({ root, repo }) {
   document.documentElement.classList.add('pet-mode');
   root.innerHTML = `
     <div class="pet-stage">
@@ -45,22 +46,25 @@ export async function renderPet({ root }) {
   // ——— 对话气泡（流式回复展示） ———
 
   let bubbleTimer = null;
+  let bubbleKind = null; // 当前气泡类型：status（对话状态）/ speak（告警播报）/ chatter（主动搭话）/ null（流式回复等）
   let streaming = false;
 
-  function showBubble(html, { autoHide = true, lingerMs, tall = false } = {}) {
+  function showBubble(html, { autoHide = true, lingerMs, tall = false, kind = null } = {}) {
     if (bubbleTimer) { clearTimeout(bubbleTimer); bubbleTimer = null; }
     hideMenu();
+    bubbleKind = kind;
     bubble.classList.toggle('tall', tall);
     bubble.innerHTML = html;
     bubble.hidden = false;
     if (autoHide) {
-      bubbleTimer = setTimeout(() => { bubble.hidden = true; bubble.classList.remove('tall'); }, lingerMs || BUBBLE_LINGER_MS);
+      bubbleTimer = setTimeout(() => { bubble.hidden = true; bubbleKind = null; bubble.classList.remove('tall'); }, lingerMs || BUBBLE_LINGER_MS);
     }
   }
 
   function hideBubble() {
     if (bubbleTimer) { clearTimeout(bubbleTimer); bubbleTimer = null; }
     bubble.hidden = true;
+    bubbleKind = null;
     bubble.classList.remove('tall');
   }
 
@@ -283,9 +287,48 @@ export async function renderPet({ root }) {
     if (recoveries.length) {
       parts.push(`<b>${all.length ? '另外～' : '好消息！'}${recoveries.join('、')} 恢复正常啦 🎉</b>`);
     }
-    showBubble(parts.join('<br>'), { lingerMs: 15000, tall: true });
+    showBubble(parts.join('<br>'), { lingerMs: 15000, tall: true, kind: 'speak' });
     playPetMotion();
   });
+
+  // 主窗/面板对话状态播报（思考中/已回复/出错）：本窗正在拖放分析或换装时不插话
+  void globalThis.__TAURI__?.event?.listen?.('pet-chat-status', (e) => {
+    const state = e?.payload?.state;
+    if (streaming || skinLoading) return;
+    if (state === 'thinking') {
+      showBubble('让我想想哈<span class="pet-dots"><i>·</i><i>·</i><i>·</i></span>', { autoHide: false, kind: 'status' });
+      playPetMotion();
+    } else if (state === 'replied') {
+      showBubble(
+        bubbleKind === 'status' ? '好啦，回复好啦～✨' : '主人，对话窗有新回复啦～✨',
+        { lingerMs: 5000, kind: 'status' },
+      );
+    } else if (state === 'error') {
+      showBubble('呜…好像出错了，去看看错误信息吧', { lingerMs: 6000, kind: 'status' });
+    }
+  });
+
+  // ——— 主动搭话（拟人化闲聊）———
+  // 开关存 mqc.pet.chatter（设置页「桌宠形象」卡）；最小间隔 10 分钟 + 概率节流
+  // （平均约 40 分钟一句）；勿扰时段（23:00–08:00）由文案层返回 null 静音
+  const CHATTER_KEY = 'mqc.pet.chatter';
+  let lastChatterAt = Date.now();
+  setInterval(() => {
+    if (document.hidden || streaming || skinLoading) return;
+    if (!bubble.hidden || !menu.hidden) return;
+    if (localStorage.getItem(CHATTER_KEY) === '0') return;
+    if (Date.now() - lastChatterAt < 10 * 60 * 1000) return;
+    if (Math.random() > 0.25) return;
+    const line = pickChatterLine({
+      providers: repo?.listProviders?.() ?? [],
+      settings: repo?.loadSettings?.(),
+      now: new Date(),
+    });
+    if (!line) return;
+    lastChatterAt = Date.now();
+    showBubble(line, { lingerMs: 9000, kind: 'chatter' });
+    playPetMotion();
+  }, 60 * 1000);
 
   /// 给不 settable 的库 Promise 加超时：Live2DModel.from 在个别加载失败场景
   /// 既不 resolve 也不 reject，会把换装锁（skinLoading）永久卡死——表现为

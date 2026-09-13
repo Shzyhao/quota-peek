@@ -3,7 +3,8 @@
 // 流式逻辑与存储复用 core/chat.js，与桌宠窗气泡共用同一后端命令。
 
 import {
-  loadHistory, saveHistory, clearHistory, buildQuotaContext, buildOutgoingMessages,
+  loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession, newSession,
+  buildQuotaContext, buildOutgoingMessages,
   buildProfileFromProvider, importableProviders,
   isChatAvailable, getChatConfig, saveChatConfig, setChatKey, hasChatKey,
   deleteChatKey, testChatConnection, sendChat, cancelChat,
@@ -17,7 +18,15 @@ export function chatView() {
 
 export function mountChatPage(el, { repo }) {
   let config = { profiles: [], activeProfileId: null, persona: '' };
-  let messages = loadHistory();
+  // 多会话：sessions 为最近活跃倒序列表，messages 始终是当前会话的消息视图；
+  // 空存储播种一个初始会话（两个窗口共享 storage，只有先挂载者播种生效）
+  let loaded = loadSessions();
+  if (!loaded.sessions.length) {
+    const fresh = newSession();
+    loaded = saveSessions([fresh], fresh.id);
+  }
+  let { sessions, activeId } = loaded;
+  let messages = sessions.find((s) => s.id === activeId)?.messages ?? [];
   let streaming = false;
   // 编辑中的 profile（null = 新建未开始；{...profile, key} = 编辑/新建表单内容）
   let editing = null;
@@ -35,10 +44,13 @@ export function mountChatPage(el, { repo }) {
 
   el.innerHTML = `
     <div class="chat-toolbar">
+      <select data-role="chat-session" title="切换会话（保留最近 10 个）"></select>
+      <button class="btn" data-role="chat-session-new" title="新建会话">＋新对话</button>
+      <button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>
       <select data-role="chat-profile" title="当前使用的模型配置"></select>
       <button class="btn" data-role="chat-test">测试连接</button>
       <button class="btn" data-role="chat-config-toggle">模型配置</button>
-      <button class="btn danger" data-role="chat-clear" title="清空当前会话记录">清空会话</button>
+      <button class="btn danger" data-role="chat-clear" title="清空当前会话的聊天记录">清空记录</button>
     </div>
     <div class="chat-config" hidden>
       <div data-role="chat-profiles"></div>
@@ -85,6 +97,10 @@ export function mountChatPage(el, { repo }) {
     sel.innerHTML = config.profiles.length
       ? config.profiles.map((p) => `<option value="${escapeHtml(p.id)}" ${p.id === config.activeProfileId ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model)}</option>`).join('')
       : '<option value="">（未配置模型）</option>';
+    const sessionSel = $('[data-role="chat-session"]');
+    sessionSel.innerHTML = sessions.length
+      ? sessions.map((s) => `<option value="${escapeHtml(s.id)}" ${s.id === activeId ? 'selected' : ''}>${escapeHtml(s.title)}</option>`).join('')
+      : '<option value="">（无会话）</option>';
   }
 
   async function renderProfileList() {
@@ -173,6 +189,12 @@ export function mountChatPage(el, { repo }) {
 
   // ——— 对话 ———
 
+  // 桌宠气泡状态播报：主窗/面板发起对话时，桌宠气泡同步「思考中/回复好啦」
+  const emitChatStatus = (state) => globalThis.__TAURI__?.event?.emit?.('pet-chat-status', { state });
+  const syncMessages = () => {
+    messages = sessions.find((s) => s.id === activeId)?.messages ?? [];
+  };
+
   function setStreaming(on) {
     streaming = on;
     $('[data-role="chat-send"]').hidden = on;
@@ -185,7 +207,9 @@ export function mountChatPage(el, { repo }) {
     const profile = config.profiles.find((p) => p.id === config.activeProfileId);
     if (!profile) { testResult = '请先在「模型配置」中添加并启用一套配置'; showTestResult(); return; }
 
-    messages.push({ role: 'user', content: text, time: Date.now() });
+    emitChatStatus('thinking');
+    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'user', content: text, time: Date.now() }));
+    syncMessages();
     setStreaming(true);
     let reply = '';
     const quotaCtx = buildQuotaContext(repo.listProviders());
@@ -211,9 +235,10 @@ export function mountChatPage(el, { repo }) {
   }
 
   function finishExchange(reply, error) {
-    messages.push({ role: 'assistant', content: reply, error, time: Date.now() });
-    saveHistory(messages);
+    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'assistant', content: reply, error, time: Date.now() }));
+    syncMessages();
     setStreaming(false);
+    emitChatStatus(error ? 'error' : 'replied');
   }
 
   function showTestResult() {
@@ -240,9 +265,20 @@ export function mountChatPage(el, { repo }) {
     } else if (role === 'chat-stop') {
       await cancelChat().catch(() => {});
     } else if (role === 'chat-clear') {
-      messages = [];
-      clearHistory();
-      renderMessages();
+      ({ sessions, activeId } = clearActiveMessages(sessions, activeId));
+      syncMessages();
+      renderAll();
+    } else if (role === 'chat-session-new') {
+      if (streaming) return;
+      const fresh = newSession();
+      ({ sessions, activeId } = saveSessions([fresh, ...sessions], fresh.id));
+      syncMessages();
+      renderAll();
+    } else if (role === 'chat-session-del') {
+      if (streaming) return;
+      ({ sessions, activeId } = deleteSession(sessions, activeId, activeId));
+      syncMessages();
+      renderAll();
     } else if (role === 'chat-test') {
       testResult = '测试中…'; showTestResult();
       const r = await testChatConnection().catch((err) => ({ ok: false, message: String(err?.message || err) }));
@@ -311,11 +347,28 @@ export function mountChatPage(el, { repo }) {
   });
 
   el.addEventListener('change', async (e) => {
+    if (e.target.matches('[data-role="chat-session"]')) {
+      if (streaming) { renderToolbar(); return; } // 流式中不允许切换（渲染会打断流式节点）
+      activeId = e.target.value || activeId;
+      saveSessions(sessions, activeId);
+      syncMessages();
+      renderMessages();
+      return;
+    }
     if (e.target.matches('[data-role="chat-profile"]')) {
       config.activeProfileId = e.target.value || null;
       await persistConfig();
       renderAll();
     }
+  });
+
+  // 其他窗口（主窗 ↔ 桌宠面板）的会话变化经 storage 事件同步；流式中忽略，结束后再取
+  globalThis.addEventListener?.('storage', (e) => {
+    if (!e.key || (e.key !== 'mqc.chat.sessions' && e.key !== 'mqc.chat.activeSession')) return;
+    if (streaming) return;
+    ({ sessions, activeId } = loadSessions());
+    syncMessages();
+    renderAll();
   });
 
   el.addEventListener('keydown', (e) => {
