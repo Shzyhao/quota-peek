@@ -67,6 +67,15 @@ function drawIcon({ level, badge }) {
     ctx.textBaseline = 'middle';
     ctx.font = `bold ${text.length >= 3 ? 13 : text.length === 2 ? 16 : 19}px 'Segoe UI', sans-serif`;
     ctx.fillText(text, SIZE / 2, SIZE / 2 + 1);
+  } else {
+    // 无用量数据（纯余额型供应商）：画白色三柱条（与应用图标同款 motif），避免纯色块
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    const baseY = SIZE - 7;
+    [{ h: 8, x: 7 }, { h: 13, x: 14 }, { h: 18, x: 21 }].forEach(({ h, x }) => {
+      ctx.beginPath();
+      ctx.roundRect(x, baseY - h, 4.5, h, 2);
+      ctx.fill();
+    });
   }
   return ctx.getImageData(0, 0, SIZE, SIZE).data;
 }

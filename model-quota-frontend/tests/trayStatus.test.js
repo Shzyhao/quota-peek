@@ -87,17 +87,19 @@ describe('computeTrayStatus', () => {
 });
 
 describe('updateTrayStatus', () => {
+  let ctxStub;
   beforeEach(() => {
     // jsdom 无 2D 上下文：桩掉 getContext，验证绘制与 IPC 载荷
     const imageData = { data: new Uint8ClampedArray(32 * 32 * 4) };
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    ctxStub = {
       clearRect: vi.fn(),
       beginPath: vi.fn(),
       roundRect: vi.fn(),
       fill: vi.fn(),
       fillText: vi.fn(),
       getImageData: () => imageData,
-    });
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctxStub);
   });
 
   afterEach(() => {
@@ -120,6 +122,20 @@ describe('updateTrayStatus', () => {
     expect(args.height).toBe(32);
     expect(args.rgba).toHaveLength(32 * 32 * 4);
     expect(args.tooltip.length).toBeGreaterThan(0);
+  });
+
+  it('无用量数据（纯余额型）画三柱条而非数字，图标永不为纯色块', () => {
+    const invoke = vi.fn().mockResolvedValue(null);
+    globalThis.__TAURI__ = { core: { invoke } };
+    const repo = createRepository(memoryStorage());
+    repo.saveProvider(balanceProvider());
+
+    updateTrayStatus(repo, settings);
+
+    expect(ctxStub.fillText).not.toHaveBeenCalled();
+    // 1 次底色圆角方块 + 3 根柱条
+    expect(ctxStub.roundRect).toHaveBeenCalledTimes(4);
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it('网页版（无 __TAURI__）为空操作', () => {
