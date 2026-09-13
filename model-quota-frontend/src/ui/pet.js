@@ -331,10 +331,12 @@ export async function renderPet({ root, repo }) {
   }, 60 * 1000);
 
   // ——— 悬停互动（鼠标停在身上 ~0.9s 触发，类似主动搭话的短反应）———
-  // 与主动搭话共用开关；独立 2 分钟冷却，快速划过不触发；拖动/说话中/菜单打开时不插话
+  // 与主动搭话共用开关；冷却 5 秒（与气泡停留时长衔接，说完离开再进来就能接着聊）；
+  // 不重复上一句；拖动/说话中/菜单打开时不插话
   let hovering = false;
   let hoverTimer = null;
   let lastHoverTalkAt = 0;
+  let lastHoverLineText = '';
 
   function scheduleHoverTalk() {
     if (hoverTimer) clearTimeout(hoverTimer);
@@ -345,14 +347,20 @@ export async function renderPet({ root, repo }) {
       if (!bubble.hidden || !menu.hidden) return;
       if (press) return; // 拖动中
       if (localStorage.getItem(CHATTER_KEY) === '0') return;
-      if (Date.now() - lastHoverTalkAt < 2 * 60 * 1000) return;
-      const line = pickHoverLine({
-        providers: repo?.listProviders?.() ?? [],
-        settings: repo?.loadSettings?.(),
-        now: new Date(),
-      });
+      if (Date.now() - lastHoverTalkAt < 5 * 1000) return;
+      let line = '';
+      // 连抽三次避开上一句（台词池小，直接去重体验更好）
+      for (let i = 0; i < 3; i++) {
+        line = pickHoverLine({
+          providers: repo?.listProviders?.() ?? [],
+          settings: repo?.loadSettings?.(),
+          now: new Date(),
+        });
+        if (line && line !== lastHoverLineText) break;
+      }
       if (!line) return;
       lastHoverTalkAt = Date.now();
+      lastHoverLineText = line;
       showBubble(line, { lingerMs: 6000, kind: 'chatter' });
       playPetMotion();
     }, 900);
