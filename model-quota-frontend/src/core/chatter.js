@@ -75,3 +75,33 @@ export function pickChatterLine({ providers = [], settings, now = new Date(), rn
     '主人在忙呀？我在这儿待命，想聊天随时叫我～',
   ]);
 }
+
+// 悬停互动台词：鼠标停在身上时的短反应（用户主动触发，勿扰时段也回应）；
+// 偶尔（30%）顺带报一句额度状态
+export function pickHoverLine({ providers = [], settings, now = new Date(), rng = Math.random } = {}) {
+  const enabled = providers.filter((p) => p.enabled !== false);
+  const usageList = enabled.filter((p) => p.lastQuery?.status === 'ok' && p.lastQuery?.usage);
+  if (usageList.length && rng() < 0.3) {
+    const busiest = usageList
+      .map((p) => {
+        const u = p.lastQuery.usage;
+        return { name: p.name, v: Math.round(Math.max(u.windowUsedPercent ?? 0, u.weeklyUsedPercent ?? 0)) };
+      })
+      .sort((a, b) => b.v - a.v)[0];
+    if (busiest.v < 80) {
+      return pick(rng, [
+        `顺手报告～${busiest.name}才 ${busiest.v}%，一切都在掌握中哦`,
+        `嘿嘿，顺便看了一眼：${busiest.name}用量 ${busiest.v}%，稳得很～`,
+      ]);
+    }
+    return `主人注意呀，${busiest.name}已经 ${busiest.v}% 了哦！`;
+  }
+  return pick(rng, [
+    '嘻嘻，好痒～',
+    '在呢在呢，叫我呀？',
+    '嘿嘿，被我盯上了吧？我是说，盯额度呢',
+    '摸摸我会有好运哦，额度也是～',
+    '点我可以打开功能菜单，和我聊聊也可以哦',
+    '一直看着我做什么呀……额度我会看好的啦',
+  ]);
+}

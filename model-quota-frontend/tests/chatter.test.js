@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickChatterLine, isQuietHour } from '../src/core/chatter.js';
+import { pickChatterLine, pickHoverLine, isQuietHour } from '../src/core/chatter.js';
 import { defaultSettings } from '../src/core/status.js';
 
 const settings = defaultSettings();
@@ -73,5 +73,29 @@ describe('pickChatterLine', () => {
     p.enabled = false;
     const line = pickChatterLine({ providers: [p], settings, now: new Date(2026, 8, 13, 10, 0), rng: () => 0.5 });
     expect(line).not.toContain('余额过低');
+  });
+});
+
+describe('pickHoverLine（悬停互动）', () => {
+  it('默认返回短反应台词（非空且非额度长文）', () => {
+    const line = pickHoverLine({ providers: [usageProvider(30, 45)], settings, now: new Date(2026, 8, 13, 2, 0), rng: () => 0.9 });
+    expect(line).toBeTruthy();
+  });
+
+  it('rng 命中 30% 区间且用量健康时顺带报最忙用量', () => {
+    const line = pickHoverLine({ providers: [usageProvider(30, 45)], settings, now: new Date(2026, 8, 13, 10, 0), rng: () => 0.1 });
+    expect(line).toContain('智谱 GLM');
+    expect(line).toContain('45%');
+  });
+
+  it('用量超 80% 时悬停直接提醒', () => {
+    const line = pickHoverLine({ providers: [usageProvider(30, 85)], settings, now: new Date(2026, 8, 13, 10, 0), rng: () => 0.1 });
+    expect(line).toContain('85%');
+    expect(line).toContain('注意');
+  });
+
+  it('勿扰时段也回应悬停（用户主动互动）', () => {
+    const line = pickHoverLine({ providers: [], settings, now: new Date(2026, 8, 13, 3, 0), rng: () => 0.9 });
+    expect(line).toBeTruthy();
   });
 });

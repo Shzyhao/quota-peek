@@ -9,7 +9,7 @@
 // 全部走动态 import（也让 main/mini/ball 窗口不必背上 pixi 的体积）。
 
 import { analyzeFiles, isAnalysisAvailable } from '../core/analysis.js';
-import { pickChatterLine } from '../core/chatter.js';
+import { pickChatterLine, pickHoverLine } from '../core/chatter.js';
 import { escapeHtml } from './format.js';
 import {
   SKINS, SKIN_KEY, currentSkin, activeModelUrl, activeRuntime,
@@ -329,6 +329,43 @@ export async function renderPet({ root, repo }) {
     showBubble(line, { lingerMs: 9000, kind: 'chatter' });
     playPetMotion();
   }, 60 * 1000);
+
+  // ——— 悬停互动（鼠标停在身上 ~0.9s 触发，类似主动搭话的短反应）———
+  // 与主动搭话共用开关；独立 2 分钟冷却，快速划过不触发；拖动/说话中/菜单打开时不插话
+  let hovering = false;
+  let hoverTimer = null;
+  let lastHoverTalkAt = 0;
+
+  function scheduleHoverTalk() {
+    if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null;
+      if (!hovering) return;
+      if (streaming || skinLoading) return;
+      if (!bubble.hidden || !menu.hidden) return;
+      if (press) return; // 拖动中
+      if (localStorage.getItem(CHATTER_KEY) === '0') return;
+      if (Date.now() - lastHoverTalkAt < 2 * 60 * 1000) return;
+      const line = pickHoverLine({
+        providers: repo?.listProviders?.() ?? [],
+        settings: repo?.loadSettings?.(),
+        now: new Date(),
+      });
+      if (!line) return;
+      lastHoverTalkAt = Date.now();
+      showBubble(line, { lingerMs: 6000, kind: 'chatter' });
+      playPetMotion();
+    }, 900);
+  }
+
+  root.addEventListener('mouseenter', () => {
+    hovering = true;
+    scheduleHoverTalk();
+  });
+  root.addEventListener('mouseleave', () => {
+    hovering = false;
+    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+  });
 
   /// 给不 settable 的库 Promise 加超时：Live2DModel.from 在个别加载失败场景
   /// 既不 resolve 也不 reject，会把换装锁（skinLoading）永久卡死——表现为

@@ -48,7 +48,7 @@ export function petAppearanceCard() {
             <button class="btn primary" data-action="pet-import">导入自定义形象</button>
             <button class="btn" data-action="pet-reset" data-role="pet-reset">恢复内置形象</button>
           </div>
-          <label class="setting-toggle"><input type="checkbox" data-role="pet-chatter"> 桌宠主动搭话 —— 闲聊额度状态与时段问候（拟人化；深夜 23:00–08:00 自动安静，约半小时一句）</label>
+          <label class="setting-toggle"><input type="checkbox" data-role="pet-chatter"> 桌宠主动搭话 —— 闲聊额度状态、时段问候与悬停互动（拟人化；深夜 23:00–08:00 闲聊自动安静，约半小时一句）</label>
           <p class="settings-hint">支持 Cubism 2 / 3 / 4 模型文件夹（含 model3.json 或 model.json），
           也可直接选入口文件；导入后模型复制到本应用数据目录，不上传任何服务器。
           自定义模型请确认来源授权允许桌面使用。</p>
