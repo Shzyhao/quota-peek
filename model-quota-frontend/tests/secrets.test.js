@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createRepository, memoryStorage, normalizeProviderConfig } from '../src/core/storage.js';
-import { readSecret, writeSecret, deleteSecret, secretsAvailable, migrateSecretsToKeyring } from '../src/core/secrets.js';
+import { readSecret, writeSecret, deleteSecret, secretsAvailable, migrateSecretsToKeyring, cleanupOrphanSecrets } from '../src/core/secrets.js';
 
 // 桌面壳 __TAURI__.core.invoke 桩：记录调用并按命令回放
 function stubTauri() {
@@ -102,5 +102,22 @@ describe('secrets（额度密钥凭据管理器）', () => {
     const cfg = normalizeProviderConfig({ name: 'X', type: 'deepseek', hasSecret: true });
     expect(cfg.hasSecret).toBe(true);
     expect(normalizeProviderConfig({ name: 'Y', type: 'deepseek' }).hasSecret).toBe(false);
+  });
+});
+
+describe('cleanupOrphanSecrets（备份导入后的孤儿凭据清理）', () => {
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  it('只清理不在当前列表中的 id，浏览器版为空操作', async () => {
+    const { calls } = stubTauri();
+    expect(await cleanupOrphanSecrets(['a', 'b', 'c'], ['b', 'd'])).toBe(2);
+    const deletes = calls.filter(([cmd]) => cmd === 'quota_secret_delete').map(([, args]) => args.providerId);
+    expect(deletes.sort()).toEqual(['a', 'c']);
+
+    // 浏览器版（无 __TAURI__）：空操作
+    delete globalThis.__TAURI__;
+    expect(await cleanupOrphanSecrets(['x'], [])).toBe(0);
   });
 });

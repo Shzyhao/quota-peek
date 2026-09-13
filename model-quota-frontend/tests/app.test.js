@@ -817,3 +817,107 @@ describe('低额度提醒 · 桌宠播报（alertMethod=pet）', () => {
     }
   });
 });
+
+describe('v0.5.1 修复回归', () => {
+  const lowBalanceBody = { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '5.00' }] };
+
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  it('B1a: 编辑凭据管理器供应商（hasSecret、本地无明文）不重输密钥可保存', async () => {
+    const { root, repo } = seedApp([deepseek({ apiKey: '', hasSecret: true })], { view: 'providers' });
+    const cfg = repo.listProviders()[0];
+    navTo(root, 'providers');
+    root.querySelector(`[data-action="edit"][data-id="${cfg.id}"]`).click();
+
+    const modal = document.querySelector('.form-modal');
+    // 密钥留空直接保存：不应被「需要填写 API Key」拦截
+    modal.querySelector('[data-action="save"]').click();
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(document.querySelector('.form-modal')).toBeFalsy();
+    const saved = repo.getProvider(cfg.id);
+    expect(saved.name).toBe('DeepSeek 主账号');
+    expect(saved.hasSecret).toBe(true);
+  });
+
+  it('B1b: 编辑凭据管理器供应商后测试链接，输入留空自动用已存密钥', async () => {
+    globalThis.__TAURI__ = {
+      core: {
+        invoke: async (cmd, args) => {
+          if (cmd === 'quota_secret_get' && args?.providerId) {
+            return { apiKey: 'sk-keyring-9999', apiSecret: '' };
+          }
+          return null;
+        },
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => okBody }));
+    const { root, repo } = seedApp([deepseek({ apiKey: '', hasSecret: true })], { view: 'providers' });
+    const cfg = repo.listProviders()[0];
+    navTo(root, 'providers');
+    root.querySelector(`[data-action="edit"][data-id="${cfg.id}"]`).click();
+
+    document.querySelector('.form-modal [data-action="test"]').click();
+    await vi.waitFor(() => {
+      const result = document.querySelector('[data-role="test-result"]');
+      expect(result.hidden).toBe(false);
+      expect(result.textContent).toContain('连接成功');
+    });
+    // 发出的请求用的是凭据管理器里的密钥，而不是空值
+    expect(fetch.mock.calls[0][1].headers.Authorization).toContain('sk-keyring-9999');
+    void repo;
+  });
+
+  it('B4: 启动时存在存量告警不弹提醒（提醒只在刷新产出新告警时出现）', async () => {
+    const { root } = seedApp(
+      [deepseek({ lastQuery: { time: '2026-09-13T00:00:00.000Z', status: 'ok', balance: 5, currency: 'CNY', usage: null } })],
+      { view: 'overview' },
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    expect(document.querySelector('.confirm-modal')).toBeFalsy();
+    void root;
+  });
+
+  it('B3: 主窗不可见（isVisible=false）时界面弹窗提醒升级为系统通知（show-notify）', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
+    const emitted = [];
+    globalThis.__TAURI__ = {
+      event: { emit: (name, payload) => emitted.push([name, payload]) },
+      // 真机验证：Tauri 隐藏窗口时 document.hidden 仍为 false，必须走 isVisible()
+      window: { getCurrentWindow: () => ({ isVisible: async () => false }) },
+    };
+    try {
+      const { root } = seedApp([deepseek()], { view: 'settings' });
+      root.querySelector('[data-action="refresh-all"]').click();
+      await vi.waitFor(() => {
+        const hit = emitted.find(([name]) => name === 'show-notify');
+        expect(hit).toBeTruthy();
+        expect(hit[1].body).toContain('DeepSeek 主账号');
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(document.querySelector('.confirm-modal')).toBeFalsy();
+    } finally {
+      document.body.innerHTML = '';
+    }
+  });
+
+  it('B3 反向: 主窗可见时界面弹窗提醒仍弹界面弹窗', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
+    const emitted = [];
+    globalThis.__TAURI__ = {
+      event: { emit: (name, payload) => emitted.push([name, payload]) },
+      window: { getCurrentWindow: () => ({ isVisible: async () => true }) },
+    };
+    try {
+      const { root } = seedApp([deepseek()], { view: 'overview' });
+      root.querySelector('[data-action="refresh-all"]').click();
+      await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeTruthy());
+      expect(emitted.some(([name]) => name === 'show-notify')).toBe(false);
+      document.querySelector('.confirm-modal [data-action="confirm-accept"]').click();
+    } finally {
+      document.body.innerHTML = '';
+    }
+  });
+});

@@ -17,10 +17,15 @@ function uniqueName(base, existingNames) {
 
 // 添加 / 编辑供应商弹窗。
 // 安全约定：编辑时 API Key 输入框留空表示沿用原密钥，界面从不回显明文密钥。
+// 桌面版密钥在系统凭据管理器（existing.hasSecret 标记、本地无明文），留空同样表示沿用；
+// getStoredSecrets()：注入的已存密钥解析（供「测试链接」在输入留空时取凭据管理器密钥）。
 // existingNames：现有供应商名称列表（编辑时不含自身），用于默认名查重。
 // testConnection({ type, apiKey, apiSecret, baseUrl })：注入的连通性测试（桌面复用查询适配器，不入库不写日志）。
-export function openProviderForm({ mount, providerTypes, existing, onSave, existingNames = [], testConnection }) {
+export function openProviderForm({ mount, providerTypes, existing, onSave, existingNames = [], testConnection, getStoredSecrets } = {}) {
   const isEdit = Boolean(existing);
+  // 编辑时「已有密钥」的判定：本地明文或凭据管理器标记任一成立
+  const hasStoredKey = isEdit && Boolean(existing.apiKey || existing.hasSecret);
+  const hasStoredSecret = isEdit && Boolean(existing.apiSecret || existing.hasSecret);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
 
@@ -45,12 +50,16 @@ export function openProviderForm({ mount, providerTypes, existing, onSave, exist
         </label>
         <label class="full"><span data-role="api-label">API Key</span>
           <input name="apiKey" type="password" autocomplete="off" placeholder="${
-            isEdit ? `${maskApiKey(existing.apiKey)}（留空表示不修改）` : '仅保存在本地，界面与日志中均脱敏'
+            isEdit
+              ? `${existing.hasSecret ? '已存入系统凭据管理器' : maskApiKey(existing.apiKey)}（留空表示不修改）`
+              : '仅保存在本地，界面与日志中均脱敏'
           }">
         </label>
         <label class="full" data-role="secret-field" hidden><span data-role="secret-label">Secret Access Key</span>
           <input name="apiSecret" type="password" autocomplete="off" placeholder="${
-            isEdit && existing.apiSecret ? `${maskApiKey(existing.apiSecret)}（留空表示不修改）` : '与 AccessKey ID 配套的私有密钥'
+            isEdit && hasStoredSecret
+              ? `${existing.hasSecret && !existing.apiSecret ? '已存入系统凭据管理器' : maskApiKey(existing.apiSecret)}（留空表示不修改）`
+              : '与 AccessKey ID 配套的私有密钥'
           }">
         </label>
         <label class="full" data-role="url-row">
@@ -95,10 +104,21 @@ export function openProviderForm({ mount, providerTypes, existing, onSave, exist
 
   baseUrlInput.value = existing && existing.baseUrl ? existing.baseUrl : getProviderType(typeSelect.value).defaultBaseUrl;
 
-  // 当前密钥取值：输入框有值用输入值；编辑时留空表示沿用已存密钥（测试与保存同规则）
-  function effectiveSecrets() {
-    const apiKey = $('apiKey').value.trim() || (isEdit ? existing.apiKey || '' : '');
-    const apiSecret = $('apiSecret').value.trim() || (isEdit ? existing.apiSecret || '' : '');
+  // 当前密钥取值：输入框有值用输入值；编辑时留空表示沿用已存密钥
+  // （本地明文旧值，或经 getStoredSecrets 从凭据管理器解析——测试与保存同规则）
+  function readTypedSecrets() {
+    return { apiKey: $('apiKey').value.trim(), apiSecret: $('apiSecret').value.trim() };
+  }
+
+  async function effectiveSecrets() {
+    let { apiKey, apiSecret } = readTypedSecrets();
+    if ((!apiKey || (getProviderType(typeSelect.value).needsSecret && !apiSecret)) && isEdit && existing.hasSecret && getStoredSecrets) {
+      const stored = await getStoredSecrets().catch(() => null);
+      apiKey = apiKey || stored?.apiKey || '';
+      apiSecret = apiSecret || stored?.apiSecret || '';
+    }
+    apiKey = apiKey || (isEdit ? existing.apiKey || '' : '');
+    apiSecret = apiSecret || (isEdit ? existing.apiSecret || '' : '');
     return { apiKey, apiSecret };
   }
 
@@ -135,7 +155,7 @@ export function openProviderForm({ mount, providerTypes, existing, onSave, exist
       return;
     }
     if (testing) return;
-    const { apiKey, apiSecret } = effectiveSecrets();
+    const { apiKey, apiSecret } = await effectiveSecrets();
     if (!apiKey || (type.needsSecret && !apiSecret)) {
       testResult.hidden = false;
       testResult.className = 'test-result warn';
@@ -211,8 +231,9 @@ export function openProviderForm({ mount, providerTypes, existing, onSave, exist
       nameInput.value = data.name;
     }
     const type = getProviderType(data.type);
-    const keyMissing = !data.apiKey && !(isEdit && existing.apiKey);
-    const secretMissing = type.needsSecret && !data.apiSecret && !(isEdit && existing.apiSecret);
+    // 密钥留空 = 沿用已存密钥（本地明文或凭据管理器标记，见 hasStoredKey/hasStoredSecret）
+    const keyMissing = !data.apiKey && !hasStoredKey;
+    const secretMissing = type.needsSecret && !data.apiSecret && !hasStoredSecret;
     if (type.autoQuery && (keyMissing || secretMissing)) {
       showError(type.needsSecret ? '该类型需要填写 AccessKey ID 和 Secret Access Key（IAM 访问密钥）' : '该类型支持自动查询，需要填写 API Key');
       return;

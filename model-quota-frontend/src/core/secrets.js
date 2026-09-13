@@ -28,6 +28,25 @@ export async function deleteSecret(providerId) {
   return invoke('quota_secret_delete', { providerId });
 }
 
+// 清理孤儿凭据条目：备份导入等整表覆盖场景后，之前存过密钥但已不在列表中的
+// 供应商，其凭据管理器条目不再被任何记录引用，逐个删除。返回清理条数。
+export async function cleanupOrphanSecrets(previousIds, currentIds) {
+  if (!secretsAvailable()) return 0;
+  const keep = new Set(currentIds || []);
+  let removed = 0;
+  for (const id of previousIds || []) {
+    if (!keep.has(id)) {
+      try {
+        await deleteSecret(id);
+        removed += 1;
+      } catch {
+        /* 删除失败保留条目，下次导入/删除时再试 */
+      }
+    }
+  }
+  return removed;
+}
+
 // 存量明文迁移（启动时/备份导入后共用）：把 localStorage 记录里的明文密钥搬进
 // 凭据管理器并抹掉本地明文，标记 hasSecret。单条迁移失败保留明文下次重试，
 // 整体不阻塞启动。返回迁移条数。

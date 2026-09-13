@@ -3,7 +3,7 @@ import { sortProviders, filterProviders, collectAlerts } from '../core/status.js
 import { normalizeProviderConfig } from '../core/storage.js';
 import { buildBackup, parseBackup, applyBackup } from '../core/backup.js';
 import { getStoredTheme, setStoredTheme, applyTheme, THEMES } from '../core/theme.js';
-import { secretsAvailable, readSecret, writeSecret, deleteSecret, migrateSecretsToKeyring } from '../core/secrets.js';
+import { secretsAvailable, readSecret, writeSecret, deleteSecret, migrateSecretsToKeyring, cleanupOrphanSecrets } from '../core/secrets.js';
 import { openProviderForm } from './form.js';
 import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
@@ -90,6 +90,16 @@ export function renderApp({ root, repo, logger, service }) {
 
     const title = `低额度提醒：${fresh.length} 家需要关注`;
     const body = fresh.map((a) => `【${a.name}】${a.reasons.join('；')}`).join('\n');
+    // 界面弹窗前先查窗口原生可见性（注意：Tauri 隐藏窗口时 document.hidden 仍为 false，
+    // 必须用 isVisible()）——后台定时刷新场景主窗不可见，弹窗无人能看到，升级为系统通知
+    if (settings.alertMethod === 'popup' && tauriEvents) {
+      const win = globalThis.__TAURI__?.window?.getCurrentWindow?.();
+      const visible = win?.isVisible ? await win.isVisible().catch(() => true) : true;
+      if (!visible) {
+        tauriEvents.emit('show-notify', { title, body });
+        return;
+      }
+    }
     // 系统通知走桌面壳原生 Toast；网页版（无 __TAURI__）回退界面弹窗
     if (settings.alertMethod === 'notify' && tauriEvents) {
       tauriEvents.emit('show-notify', { title, body });
@@ -106,20 +116,33 @@ export function renderApp({ root, repo, logger, service }) {
   }
 
   // ——— 刷新 ———
+  // 上次同步的调度签名：无关设置（如阈值）变化不重发，避免重置后端刷新倒计时
+  let lastScheduleSig = null;
+
   function scheduleAutoRefresh() {
+    const sig = settings.autoRefreshMinutes > 0 ? String(settings.autoRefreshMinutes) : 'off';
+    if (tauriInvoke) {
+      // 桌面版：时钟在后端常驻线程（refresh.json 持久化，到点 emit backend-refresh-due），
+      // 不受 WebView 隐藏窗口定时器节流影响；签名未变不重发，避免重置倒计时
+      if (sig !== lastScheduleSig) {
+        lastScheduleSig = sig;
+        tauriInvoke('set_refresh_schedule', {
+          enabled: settings.autoRefreshMinutes > 0,
+          intervalMinutes: settings.autoRefreshMinutes,
+        }).catch(() => {
+          // 同步失败回滚签名：后续设置变化可重试
+          lastScheduleSig = null;
+        });
+      }
+      return;
+    }
+    // 网页版：页面内 setInterval；同签名且计时器在跑则不动（改无关设置不重置倒计时）
+    if (sig === lastScheduleSig && autoTimer) return;
     if (autoTimer) {
       clearInterval(autoTimer);
       autoTimer = null;
     }
-    if (tauriInvoke) {
-      // 桌面版：时钟在后端常驻线程（refresh.json 持久化，到点 emit backend-refresh-due），
-      // 不受 WebView 隐藏窗口定时器节流影响
-      tauriInvoke('set_refresh_schedule', {
-        enabled: settings.autoRefreshMinutes > 0,
-        intervalMinutes: settings.autoRefreshMinutes,
-      }).catch(() => {});
-      return;
-    }
+    lastScheduleSig = sig;
     if (settings.autoRefreshMinutes > 0) {
       autoTimer = setInterval(() => {
         void refreshAll({ silent: true });
@@ -181,18 +204,28 @@ export function renderApp({ root, repo, logger, service }) {
       const typedSecret = String(data.apiSecret || '').trim();
       if (typedKey || typedSecret) {
         const prev = existing?.hasSecret ? await readSecret(existing.id).catch(() => null) : null;
-        await writeSecret(config.id, {
-          apiKey: typedKey || prev?.apiKey || '',
-          apiSecret: typedSecret || prev?.apiSecret || '',
-        }).catch(() => {});
-        config.hasSecret = true;
+        try {
+          await writeSecret(config.id, {
+            apiKey: typedKey || prev?.apiKey || '',
+            apiSecret: typedSecret || prev?.apiSecret || '',
+          });
+          config.hasSecret = true;
+        } catch {
+          // 凭据管理器写入失败：宁可回退明文本地保存，也不能把用户刚输入的密钥丢掉
+          config.apiKey = typedKey || prev?.apiKey || '';
+          config.apiSecret = typedSecret || prev?.apiSecret || '';
+          config.hasSecret = false;
+        }
       } else if (existing?.hasSecret) {
         config.hasSecret = true;
       }
     } else {
-      // 浏览器版：无系统凭据可用，沿用原行为（密钥随记录存 localStorage）
+      // 浏览器版：无系统凭据可用，沿用原行为（密钥随记录存 localStorage）；
+      // 输入留空时保留 hasSecret 标记（桌面备份导入到浏览器的记录密钥在凭据管理器里）
       config.apiKey = String(data.apiKey || '').trim() || (existing ? existing.apiKey : '');
       config.apiSecret = String(data.apiSecret || '').trim() || (existing ? existing.apiSecret : '');
+      config.hasSecret = !(String(data.apiKey || '').trim() || String(data.apiSecret || '').trim())
+        && existing?.hasSecret === true;
     }
     repo.saveProvider(config);
     render();
@@ -206,11 +239,13 @@ export function renderApp({ root, repo, logger, service }) {
       existing,
       // 现有名称列表（编辑时用于排除自身后查重）
       existingNames: repo.listProviders().map((p) => p.name),
-      // 连通性测试：直接调用类型适配器，不入库不写日志（失败信息在表单内展示）
+      // 连通性测试：直接调用类型适配器，不入库不写日志（失败信息在表单内展示）；
+      // 桌面版已存凭据管理器的供应商，测试时输入留空则从凭据管理器解析密钥
       testConnection: async ({ type, apiKey, apiSecret, baseUrl }) => {
         const def = getProviderType(type);
         return def.query({ apiKey, apiSecret, baseUrl, fetchImpl: globalThis.fetch });
       },
+      getStoredSecrets: existing?.hasSecret && secretsAvailable() ? () => readSecret(existing.id) : undefined,
       onSave: saveProviderFromForm,
     });
   }
@@ -256,9 +291,14 @@ export function renderApp({ root, repo, logger, service }) {
       danger: true,
     });
     if (!ok) return false;
+    // 整表覆盖前记下已有凭据条目的供应商 id：导入后被移除的，凭据管理器条目要一并清理
+    const previousSecretIds = secretsAvailable()
+      ? repo.listProviders().filter((p) => p.hasSecret).map((p) => p.id)
+      : [];
     applyBackup(repo, parsed.backup);
     // 桌面版：导入记录中的明文密钥即时搬进凭据管理器并抹掉本地明文
     await migrateSecretsToKeyring(repo).catch(() => {});
+    void cleanupOrphanSecrets(previousSecretIds, repo.listProviders().map((p) => p.id));
     settings = repo.loadSettings();
     scheduleAutoRefresh();
     render();
@@ -563,8 +603,9 @@ export function renderApp({ root, repo, logger, service }) {
 
   scheduleAutoRefresh();
   render();
-  // 启动即按当前数据刷新托盘图标与告警状态（首次运行托盘仍是静态默认图标）
-  afterDataChange();
+  // 启动只初始化托盘动态图标；不触发提醒（提醒只在刷新产出新告警时出现，
+  // 避免每次打开应用都对存量告警重复弹窗）
+  void updateTrayStatus(repo, settings);
 
   return { refreshAll, refreshOne, render, importFromText, exportBackup, deleteProvider, clearAll };
 }

@@ -517,6 +517,9 @@ pub fn quota_secret_set(
     api_key: String,
     api_secret: String,
 ) -> Result<(), String> {
+    if provider_id.trim().is_empty() {
+        return Err("provider_id 不能为空".into());
+    }
     let value = serde_json::json!({ "apiKey": api_key, "apiSecret": api_secret }).to_string();
     state
         .secrets
@@ -580,6 +583,13 @@ pub fn set_refresh_schedule(
         enabled: enabled && interval_minutes > 0,
         interval_minutes,
     };
+    // 配置没变就不重置：前端改无关设置（如提醒阈值）重发同值时，不打断刷新倒计时
+    {
+        let cur = sched.prefs.lock().unwrap();
+        if cur.enabled == prefs.enabled && cur.interval_minutes == prefs.interval_minutes {
+            return Ok(());
+        }
+    }
     persist_refresh_prefs(&app, &prefs)?;
     *sched.prefs.lock().unwrap() = prefs;
     *sched.seq.lock().unwrap() += 1;
@@ -607,18 +617,22 @@ pub fn load_refresh_prefs(app: &AppHandle) -> RefreshPrefs {
         .unwrap_or(RefreshPrefs { enabled: false, interval_minutes: 0 })
 }
 
-/// 调度线程：序号变化（前端同步配置）即重算下一轮触发点；到点发事件后重新计时
+/// 调度线程：序号变化（前端同步配置）即重算下一轮触发点；到点发事件后重新计时。
+/// 启动即按已加载的配置武装（first 标记）——前端尚未同步前 refresh.json 已启用的
+/// 配置也能生效，不依赖必有的一次 set_refresh_schedule。
 pub fn spawn_refresh_scheduler(app: AppHandle, sched: std::sync::Arc<RefreshSchedule>) {
     std::thread::spawn(move || {
         let mut seen_seq: u64 = 0;
         let mut next_fire: Option<std::time::Instant> = None;
+        let mut first = true;
         loop {
             let (prefs, seq) = {
                 let prefs = sched.prefs.lock().unwrap().clone();
                 let seq = *sched.seq.lock().unwrap();
                 (prefs, seq)
             };
-            if seq != seen_seq {
+            if first || seq != seen_seq {
+                first = false;
                 seen_seq = seq;
                 next_fire = if prefs.enabled && prefs.interval_minutes > 0 {
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(prefs.interval_minutes * 60))

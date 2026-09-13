@@ -108,8 +108,10 @@ export function renderMini({ root, repo, logger, service }) {
     });
   }
 
-  // 每 30 秒重绘一次（同步主界面/其他小窗口写入的数据）
-  setInterval(render, 30000);
+  // 每 30 秒重绘一次（同步主界面/其他窗口写入的数据）；窗口隐藏时跳过，省去无谓的 DOM 重建
+  setInterval(() => {
+    if (!document.hidden) render();
+  }, 30000);
   render();
 
   return { refreshAll, render };

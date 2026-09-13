@@ -364,7 +364,7 @@ export function settingsView(ctx) {
             </select>
           </label>
         </div>
-        <p class="settings-hint">刷新后检测到新的余额 / 额度 / 到期 / 查询失败告警时提醒（同一告警只提醒一次，恢复正常后重新计数，恢复时桌宠也会报喜）。桌宠播报 = 桌宠气泡说话并做小动作，桌宠未开启时回退界面弹窗；系统通知为 Windows 原生 Toast，网页版自动回退界面弹窗。</p>
+        <p class="settings-hint">刷新后检测到新的余额 / 额度 / 到期 / 查询失败告警时提醒（同一告警只提醒一次，恢复正常后重新计数，恢复时桌宠也会报喜）。桌宠播报 = 桌宠气泡说话并做小动作，桌宠未开启时回退界面弹窗；选界面弹窗时若主窗正隐藏（后台定时刷新），自动改用系统通知以免提醒无人可见；系统通知为 Windows 原生 Toast，网页版自动回退界面弹窗。</p>
       </section>
 
       <section class="settings-card">

@@ -79,8 +79,10 @@ export function renderBall({ root, repo }) {
   // 圆形徽章模式：球体填满整个无边框窗口，外观由 .ball 样式呈现
   document.documentElement.classList.add('ball-mode');
 
-  // 与迷你窗同频：定期重绘，同步其他窗口写入的数据
-  setInterval(render, 30000);
+  // 与迷你窗同频：定期重绘，同步其他窗口写入的数据；窗口隐藏时跳过（省 DOM 重建）
+  setInterval(() => {
+    if (!document.hidden) render();
+  }, 30000);
   render();
 
   return { render };
