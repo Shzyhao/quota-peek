@@ -171,10 +171,12 @@ export function mountChatPage(el, { repo }) {
   // 挂起中的工具提议卡（批准/拒绝）
   function proposedCardHtml(c) {
     const argsText = JSON.stringify(c.args ?? {}, null, 2);
-    const argsShort = argsText.length > 800 ? `${argsText.slice(0, 800)}…` : argsText;
+    // 预览上限 20k 字符（配合 run_command 8k 命令上限，确保命令始终完整可见）；区域本身可滚动
+    const over = argsText.length > 20000;
+    const argsShown = over ? `${argsText.slice(0, 20000)}…` : argsText;
     return `<div class="chat-tool-card pending${c.danger ? ' danger' : ''}">
       <div class="chat-tool-head">🔧 Agent 请求执行：${escapeHtml(c.name)}${c.danger ? ' <span class="chat-tool-danger-tag">高危</span>' : ''}</div>
-      <pre class="chat-tool-out">${escapeHtml(argsShort)}</pre>
+      <pre class="chat-tool-out">${escapeHtml(argsShown)}${over ? '\n（预览截断：参数过长，请谨慎批准）' : ''}</pre>
       <div class="chat-tool-actions">
         <button class="btn primary" data-role="agent-approve">批准执行</button>
         <button class="btn primary" data-role="agent-chain" title="批准本任务后续全部工具调用（多步自主，仍受 8 步上限与取消约束）">⚡ 批准整条链</button>
@@ -247,6 +249,13 @@ export function mountChatPage(el, { repo }) {
   const syncMessages = () => {
     messages = sessions.find((s) => s.id === activeId)?.messages ?? [];
   };
+  // 追加消息的统一入口：先从 storage 重读最新会话态再追加，
+  // 防止另一窗口（主窗/面板）在本地流式期间写入的消息被整表覆盖丢失
+  function appendToActiveSession(msg) {
+    const fresh = loadSessions();
+    ({ sessions, activeId } = appendToSession(fresh.sessions, fresh.activeId, msg));
+    syncMessages();
+  }
 
   function setStreaming(on) {
     streaming = on;
@@ -264,13 +273,12 @@ export function mountChatPage(el, { repo }) {
     const pendingAttachments = attachments;
     attachments = [];
     renderAttachments();
-    ({ sessions, activeId } = appendToSession(sessions, activeId, {
+    appendToActiveSession({
       role: 'user',
       content: text,
       attachments: pendingAttachments.length ? pendingAttachments : undefined,
       time: Date.now(),
-    }));
-    syncMessages();
+    });
     setStreaming(true);
     const quotaCtx = buildQuotaContext(repo.listProviders());
     const outgoing = buildOutgoingMessages([...messages.slice(0, -1)], quotaCtx);
@@ -320,15 +328,14 @@ ${attachmentsToText(pendingAttachments)}` : text,
         renderMessages();
       },
       onToolResult: (data) => {
-        // 提议卡标记完成并移除，结果卡入库（会话历史可回看）
+        // 提议卡移除，结果卡入库（会话历史可回看）
         agentLive = [];
-        ({ sessions, activeId } = appendToSession(sessions, activeId, {
+        appendToActiveSession({
           role: 'assistant',
           content: '',
           tool: { name: data.name, ok: !!data.ok, output: String(data.output || ''), danger: !!data.danger, auto: !!data.auto },
           time: Date.now(),
-        }));
-        syncMessages();
+        });
         renderMessages();
       },
       onDone: (text) => finishAgent(text, false),
@@ -337,8 +344,7 @@ ${attachmentsToText(pendingAttachments)}` : text,
   }
 
   function finishAgent(text, error) {
-    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'assistant', content: text, error, time: Date.now() }));
-    syncMessages();
+    appendToActiveSession({ role: 'assistant', content: text, error, time: Date.now() });
     agentLive = [];
     agentRunning = false;
     chainApproved = false;
@@ -348,8 +354,7 @@ ${attachmentsToText(pendingAttachments)}` : text,
   }
 
   function finishExchange(reply, error) {
-    ({ sessions, activeId } = appendToSession(sessions, activeId, { role: 'assistant', content: reply, error, time: Date.now() }));
-    syncMessages();
+    appendToActiveSession({ role: 'assistant', content: reply, error, time: Date.now() });
     setStreaming(false);
     emitChatStatus(error ? 'error' : 'replied');
   }

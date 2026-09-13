@@ -172,6 +172,29 @@ describe('isReadonlyTool（⚡ 只读自动批准范围）', () => {
   });
 });
 
+describe('附件体积预算（防 localStorage 撑爆）', () => {
+  it('超预算时从最旧的消息起省略附件正文，最新消息保持完整', () => {
+    const s = memoryStorage();
+    let { sessions, activeId } = loadSessions(s);
+    // 每个附件 60k 字符，追加 60 个 → 累计远超 3MB 预算
+    for (let i = 0; i < 60; i++) {
+      ({ sessions, activeId } = appendToSession(sessions, activeId, {
+        role: 'user',
+        content: `msg-${i}`,
+        attachments: [{ name: `f${i}.txt`, content: 'X'.repeat(60 * 1024), truncated: true }],
+        time: 1000 + i,
+      }, s));
+    }
+    const active = sessions.find((x) => x.id === activeId);
+    const first = active.messages[0];
+    const last = active.messages.at(-1);
+    expect(first.attachments[0].content).toBe(''); // 最旧被省略
+    expect(last.attachments[0].content.length).toBe(60 * 1024); // 最新保持完整
+    // 全部序列化后应回落到预算附近（远小于无预算时的 3.6MB+）
+    expect(JSON.stringify(sessions).length).toBeLessThan(3_600_000);
+  });
+});
+
 describe('额度上下文注入', () => {
   it('无供应商返回 null', () => {
     expect(buildQuotaContext([])).toBeNull();

@@ -107,6 +107,28 @@ export function appendToSession(sessions, activeId, message, storage = globalThi
       messages: [...s.messages, message].slice(-HISTORY_LIMIT),
     };
   }
+  // 附件体积预算：会话序列化超 3MB 时从最旧的消息起省略附件正文（最后一条保持完整），
+  // 防止大量附件撑爆 localStorage 导致 saveSessions 静默丢数据
+  const BUDGET = 3_000_000;
+  const hasContent = (list2) => list2.some((x) => (x.messages || []).some((m) => (m.attachments || []).some((a) => a.content)));
+  let raw = JSON.stringify(list);
+  let guard = 0;
+  while (raw.length > BUDGET && hasContent(list) && guard < 500) {
+    guard += 1;
+    let stripped = false;
+    for (let si = 0; si < list.length && !stripped; si++) {
+      const msgs = list[si].messages || [];
+      for (let mi = 0; mi < msgs.length && !stripped; mi++) {
+        const atts = msgs[mi].attachments || [];
+        if (atts.some((a) => a.content)) {
+          list[si].messages[mi] = { ...msgs[mi], attachments: atts.map((a) => ({ ...a, content: '' })) };
+          stripped = true;
+        }
+      }
+    }
+    if (!stripped) break;
+    raw = JSON.stringify(list);
+  }
   return saveSessions(list, idx < 0 ? list[0].id : activeId, storage);
 }
 

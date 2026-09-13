@@ -45,6 +45,8 @@ pub struct PendingCall {
     pub id: String,
     pub name: String,
     pub args: Value,
+    /// 同一条 assistant 消息里除首个外的其余 tool_call_id（resolve 时回填「已跳过」）
+    pub skipped_ids: Vec<String>,
 }
 
 /// Agent 运行状态（单飞：同一时刻只允许一个 Agent 循环）
@@ -85,6 +87,11 @@ fn tools_spec() -> Value {
 /// 危险工具（前端确认卡片标红）
 fn tool_danger(name: &str) -> bool {
     matches!(name, "write_text_file" | "run_command")
+}
+
+/// 只读工具（与前端 isReadonlyTool 同集合）：无系统副作用，可安全自动执行
+fn tool_readonly(name: &str) -> bool {
+    matches!(name, "get_current_time" | "get_system_info" | "list_directory" | "read_text_file")
 }
 
 fn valid_tool(name: &str) -> bool {
@@ -198,7 +205,9 @@ async fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Err("仅允许 http/https 网址".into());
             }
-            spawn_quiet("cmd", &["/C", "start", "", url]).map_err(|e| format!("打开失败：{e}"))?;
+            // 不经 cmd /C start：URL 中的 & 等元字符会被 cmd 当命令分隔符（注入面），
+            // explorer.exe 直开不经过 shell 解析
+            spawn_quiet("explorer.exe", &[url]).map_err(|e| format!("打开失败：{e}"))?;
             Ok(format!("已打开 {url}"))
         }
         "open_path" => {
@@ -206,7 +215,7 @@ async fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
             if !std::path::Path::new(&path).exists() {
                 return Err(format!("路径不存在：{path}"));
             }
-            spawn_quiet("cmd", &["/C", "start", "", path]).map_err(|e| format!("打开失败：{e}"))?;
+            spawn_quiet("explorer.exe", &[path]).map_err(|e| format!("打开失败：{e}"))?;
             Ok(format!("已打开 {path}"))
         }
         "write_clipboard" => {
@@ -228,6 +237,9 @@ async fn execute_tool(name: &str, args: &Value) -> Result<String, String> {
         }
         "run_command" => {
             let command = str_arg(args, "command")?;
+            if command.chars().count() > 8000 {
+                return Err("命令超过 8000 字符，拒绝执行".into());
+            }
             let mut child = spawn_quiet(
                 "powershell",
                 &["-NoProfile", "-NonInteractive", "-Command", command],
@@ -360,7 +372,7 @@ impl AgentClient {
 
 // ——— 循环体 ———
 
-const AGENT_SYSTEM: &str = "你是桌看 Agent，可以调用工具帮用户完成系统操作。调用工具前先用一句话（同一条回复的文字部分）说明你要做什么；工具需要用户批准才会执行。全程用中文，回答简洁。";
+const AGENT_SYSTEM: &str = "你是桌看 Agent，可以调用工具帮用户完成系统操作。调用工具前先用一句话（同一条回复的文字部分）说明你要做什么；工具需要用户批准才会执行。每次回复只调用一个工具，等它的结果返回后再决定下一步。全程用中文，回答简洁。";
 
 async fn run_loop(
     app: &AppHandle,
@@ -416,49 +428,94 @@ async fn run_loop(
 
         agent.messages.lock().unwrap().push(message.clone());
 
-        // 多步自主模式：本任务内不再挂起，直接执行并继续
+        // 多步自主模式：本消息内的全部 tool_calls 自动执行——只读工具直接跑；
+        // 写/执行类降级：跳过并回填提示（链中读取的不可信内容可能诱导危险调用，
+        // 不能让它绕过人工批准），模型会改用确认卡路径重新提议
         if agent.chain_approved.load(Ordering::SeqCst) {
-            let start = Instant::now();
-            let result = execute_tool(&name, &args).await;
-            let duration = start.elapsed().as_millis();
-            let (ok, output) = match result {
-                Ok(out) => (true, out),
-                Err(e) => (false, e),
-            };
-            audit(app, &name, &args, true, true, ok, duration, &output);
-            let _ = events.send(AgentEvent::ToolResult {
-                call_id: call_id.clone(),
-                name: name.clone(),
-                ok,
-                output: output.clone(),
-                duration_ms: duration as u64,
-                auto: true,
-            });
-            agent.messages.lock().unwrap().push(json!({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": output,
-            }));
-            agent.steps.fetch_add(1, Ordering::SeqCst);
+            let mut executed = 0;
+            for call in &tool_calls {
+                let cid = call.get("id").and_then(|v| v.as_str()).unwrap_or("call_x").to_string();
+                let cname = call
+                    .pointer("/function/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let cargs: Value = serde_json::from_str(
+                    call.pointer("/function/arguments").and_then(|v| v.as_str()).unwrap_or("{}"),
+                )
+                .unwrap_or_else(|_| json!({}));
+                if !valid_tool(&cname) || !tool_readonly(&cname) {
+                    agent.messages.lock().unwrap().push(json!({
+                        "role": "tool",
+                        "tool_call_id": cid,
+                        "content": if valid_tool(&cname) {
+                            "该工具需要单独确认，已跳过自动执行。请重新提议或直接回答。".to_string()
+                        } else {
+                            format!("未知工具 {cname}，请改用其他方式或直接回答")
+                        },
+                    }));
+                    continue;
+                }
+                let start = Instant::now();
+                let result = execute_tool(&cname, &cargs).await;
+                let duration = start.elapsed().as_millis();
+                let (ok, output) = match result {
+                    Ok(out) => (true, out),
+                    Err(e) => (false, e),
+                };
+                audit(app, &cname, &cargs, true, true, ok, duration, &output);
+                let _ = events.send(AgentEvent::ToolResult {
+                    call_id: cid.clone(),
+                    name: cname.clone(),
+                    ok,
+                    output: output.clone(),
+                    duration_ms: duration as u64,
+                    auto: true,
+                });
+                agent.messages.lock().unwrap().push(json!({
+                    "role": "tool",
+                    "tool_call_id": cid,
+                    "content": output,
+                }));
+                executed += 1;
+            }
+            if executed > 0 {
+                agent.steps.fetch_add(1, Ordering::SeqCst);
+            }
             continue;
         }
 
+        // 单步模式：首个 tool_call 挂起待确认；若模型一次给了多个，其余在
+        // agent_resolve 里回填「已跳过」，保证每个 tool_call_id 都有响应（否则 HTTP 400）
         if !valid_tool(&name) {
             // 模型幻觉出的工具：以工具结果形式拒绝并继续，不打断会话
-            agent.messages.lock().unwrap().push(json!({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": format!("未知工具 {name}，请改用其他方式或直接回答"),
-            }));
+            push_tool_results_for_all_calls(agent, |cid| {
+                json!({
+                    "role": "tool",
+                    "tool_call_id": cid,
+                    "content": if cid == call_id {
+                        format!("未知工具 {name}，请改用其他方式或直接回答")
+                    } else {
+                        "已跳过（一次只处理一个工具调用）".to_string()
+                    },
+                })
+            });
             agent.steps.fetch_add(1, Ordering::SeqCst);
             continue;
         }
 
         // 挂起：存待确认调用，推送 ToolProposed，等 agent_resolve 续跑
+        let skipped_ids = tool_calls
+            .iter()
+            .skip(1)
+            .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+            .map(|x| x.to_string())
+            .collect();
         *agent.pending.lock().unwrap() = Some(PendingCall {
             id: call_id.clone(),
             name: name.clone(),
             args: args.clone(),
+            skipped_ids,
         });
         let _ = events.send(AgentEvent::ToolProposed {
             call_id,
@@ -478,6 +535,26 @@ async fn run_loop(
     }
 }
 
+/// 为 messages 末尾 assistant 消息中的全部 tool_calls 生成回填（unknown-tool 场景）
+fn push_tool_results_for_all_calls(agent: &AgentState, make: impl Fn(&str) -> Value) {
+    let last = agent.messages.lock().unwrap().last().cloned();
+    let Some(last) = last else { return };
+    let ids: Vec<String> = last
+        .get("tool_calls")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c.get("id").and_then(|v| v.as_str()))
+                .map(|x| x.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut msgs = agent.messages.lock().unwrap();
+    for cid in ids {
+        msgs.push(make(&cid));
+    }
+}
+
 // ——— Tauri 命令 ———
 
 /// 发起 Agent 任务：事件经 Channel 推送；模型提出工具调用时挂起，等 agent_resolve。
@@ -489,23 +566,22 @@ pub async fn agent_send(
     messages: Vec<Value>,
     on_event: Channel<AgentEvent>,
 ) -> Result<(), String> {
-    if agent.running.swap(true, Ordering::SeqCst) {
+    // 单飞判定：running 且无待确认调用 = 有循环真正在跑（模型请求/工具执行中），拒绝并发；
+    // running 但有 pending = 循环已挂起在等人批准（前端可能已丢失确认卡），安全接管重置。
+    // （修复：旧逻辑先查 running 导致「挂起未理睬」后永久卡死。）
+    let busy = agent.running.load(Ordering::SeqCst);
+    let suspended = agent.pending.lock().unwrap().is_some();
+    if busy && !suspended {
         return Err("Agent 正在执行中".into());
     }
-    let proceed = {
-        // 清理上次任务遗留的未决调用（未被理睬的场景）
-        *agent.pending.lock().unwrap() = None;
-        agent.cancel.store(false, Ordering::SeqCst);
-        agent.steps.store(0, Ordering::SeqCst);
-        agent.chain_approved.store(false, Ordering::SeqCst);
-        let mut msgs = vec![json!({ "role": "system", "content": AGENT_SYSTEM })];
-        msgs.extend(messages);
-        *agent.messages.lock().unwrap() = msgs;
-        true
-    };
-    if !proceed {
-        return Ok(());
-    }
+    agent.running.store(true, Ordering::SeqCst);
+    *agent.pending.lock().unwrap() = None;
+    agent.cancel.store(false, Ordering::SeqCst);
+    agent.steps.store(0, Ordering::SeqCst);
+    agent.chain_approved.store(false, Ordering::SeqCst);
+    let mut msgs = vec![json!({ "role": "system", "content": AGENT_SYSTEM })];
+    msgs.extend(messages);
+    *agent.messages.lock().unwrap() = msgs;
 
     let (profile, key) = crate::commands::active_profile_with_key(&chat)?;
     let client = AgentClient::new(key, profile.base_url.clone(), profile.model.clone());
@@ -564,6 +640,16 @@ pub async fn agent_resolve(
             "tool_call_id": pending.id,
             "content": output,
         }));
+        // 同消息内未确认的其余调用：安全回填「已跳过」（用户只批准过首个）
+        let mut msgs = agent.messages.lock().unwrap();
+        for sid in &pending.skipped_ids {
+            msgs.push(json!({
+                "role": "tool",
+                "tool_call_id": sid,
+                "content": "已跳过（一次只处理一个工具调用）",
+            }));
+        }
+        drop(msgs);
         agent.steps.fetch_add(1, Ordering::SeqCst);
     } else {
         audit(&app, &pending.name, &pending.args, false, false, false, 0, "（用户拒绝）");
@@ -575,11 +661,21 @@ pub async fn agent_resolve(
             duration_ms: 0,
             auto: false,
         });
-        agent.messages.lock().unwrap().push(json!({
+        // 全部 tool_calls 回填拒绝
+        let mut msgs = agent.messages.lock().unwrap();
+        msgs.push(json!({
             "role": "tool",
             "tool_call_id": pending.id,
             "content": "用户拒绝了该工具调用，请改用其他方式或直接回答",
         }));
+        for sid in &pending.skipped_ids {
+            msgs.push(json!({
+                "role": "tool",
+                "tool_call_id": sid,
+                "content": "已跳过（用户拒绝了本批工具调用）",
+            }));
+        }
+        drop(msgs);
     }
 
     let (profile, key) = crate::commands::active_profile_with_key(&chat)?;
