@@ -15,7 +15,7 @@ import {
 import { analyzeFiles } from '../core/analysis.js';
 import { escapeHtml } from './format.js';
 import {
-  SKINS, currentSkin, modelUrlFor, activeModelUrl, activeRuntime,
+  SKINS, SKIN_KEY, currentSkin, modelUrlFor, activeModelUrl, activeRuntime,
   getActiveCustom, setActiveCustom, clearActiveCustom, listCustomModels,
   loadRuntimeScript,
 } from './live2d.js';
@@ -227,9 +227,12 @@ export async function renderPet({ root, repo }) {
       hideMenu();
       const label = SKINS.find((s) => s.id === id)?.label || id;
       showBubble(`正在换上「${label}」…`, { autoHide: false });
-      await reloadModel();
+      await withTimeout(reloadModel(), 25000, '换装');
       showBubble(`已换上「${label}」✨`);
       playPetMotion();
+    } catch (err) {
+      console.error('[pet] 换装失败', err);
+      showBubble(`换装失败：${escapeHtml(String(err?.message || err))}`);
     } finally {
       skinLoading = false;
     }
@@ -347,11 +350,21 @@ export async function renderPet({ root, repo }) {
     modelRef?.motion(group, undefined, 3);
   };
 
+  /// 给不 settable 的库 Promise 加超时：Live2DModel.from 在个别加载失败场景
+  /// 既不 resolve 也不 reject，会把换装锁（skinLoading）永久卡死——表现为
+  /// 之后所有换装点击都无反应。20s 超时视为失败，让调用方 finally 必然执行。
+  function withTimeout(promise, ms, label) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label}超时（${ms / 1000}s）`)), ms)),
+    ]);
+  }
+
   // 构建并适配模型：按「内容实际包围盒」适配（模型画布自带大片空白，按画布
   // 缩放会导致视觉尺寸失真+悬空）——先粗放，测 bounds，再缩放到目标高度并
   // 平移到水平居中、内容底部贴输入条上方
   async function buildModel() {
-    const model = await Live2DModelClass.from(activeModelUrl());
+    const model = await withTimeout(Live2DModelClass.from(activeModelUrl()), 20000, '模型加载');
     const availH = stage.clientHeight - INPUT_BAR_H;
     const cx = stage.clientWidth / 2;
     model.anchor.set(0.5, 1);
@@ -405,6 +418,24 @@ export async function renderPet({ root, repo }) {
     }
   }
 
+  // 设置页修改形象（皮肤/自定义）跨窗同步：运行时一致时热重载，否则整窗刷新。
+  // 必须在初始化 try 之前注册——回退路径不应跳过监听
+  globalThis.addEventListener?.('storage', (e) => {
+    if (!e.key || !e.key.startsWith('mqc.pet.')) return;
+    if (activeRuntime() !== loadedRuntime) {
+      location.reload();
+      return;
+    }
+    void reloadModel();
+  });
+
+  const showErrPlaceholder = () => {
+    const errEl = document.createElement('div');
+    errEl.className = 'pet-error';
+    errEl.textContent = 'Live2D 渲染不可用，对话功能不受影响';
+    stage.appendChild(errEl);
+  };
+
   try {
     const runtime = activeRuntime();
     loadedRuntime = runtime;
@@ -457,26 +488,14 @@ export async function renderPet({ root, repo }) {
         modelRef = model;
         model.motion(MODEL.idle, undefined, 3);
         showBubble('自定义形象加载失败，已恢复 22 娘');
-        return;
       } catch (fallbackErr) {
         console.error('[pet] 内置形象回退也失败', fallbackErr);
+        showErrPlaceholder();
       }
+    } else {
+      showErrPlaceholder();
     }
-    const errEl = document.createElement('div');
-    errEl.className = 'pet-error';
-    errEl.textContent = 'Live2D 渲染不可用，对话功能不受影响';
-    stage.appendChild(errEl);
   }
-
-  // 设置页修改形象（皮肤/自定义）跨窗同步：运行时一致时热重载，否则整窗刷新
-  globalThis.addEventListener?.('storage', (e) => {
-    if (!e.key || !e.key.startsWith('mqc.pet.')) return;
-    if (activeRuntime() !== loadedRuntime) {
-      location.reload();
-      return;
-    }
-    void reloadModel();
-  });
 
   return {
     app,
