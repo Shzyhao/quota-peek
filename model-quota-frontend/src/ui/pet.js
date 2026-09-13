@@ -47,19 +47,21 @@ export async function renderPet({ root }) {
   let bubbleTimer = null;
   let streaming = false;
 
-  function showBubble(html, { autoHide = true } = {}) {
+  function showBubble(html, { autoHide = true, lingerMs, tall = false } = {}) {
     if (bubbleTimer) { clearTimeout(bubbleTimer); bubbleTimer = null; }
     hideMenu();
+    bubble.classList.toggle('tall', tall);
     bubble.innerHTML = html;
     bubble.hidden = false;
     if (autoHide) {
-      bubbleTimer = setTimeout(() => { bubble.hidden = true; }, BUBBLE_LINGER_MS);
+      bubbleTimer = setTimeout(() => { bubble.hidden = true; bubble.classList.remove('tall'); }, lingerMs || BUBBLE_LINGER_MS);
     }
   }
 
   function hideBubble() {
     if (bubbleTimer) { clearTimeout(bubbleTimer); bubbleTimer = null; }
     bubble.hidden = true;
+    bubble.classList.remove('tall');
   }
 
   // 气泡上点击 = 关闭
@@ -262,6 +264,28 @@ export async function renderPet({ root }) {
     const group = MODEL.motions[Math.floor(Math.random() * MODEL.motions.length)];
     modelRef?.motion(group, undefined, 3);
   };
+
+  // 主窗低额度播报（设置页「低额度提醒方式=桌宠播报」）：气泡台词 + 随机小动作。
+  // 恢复（recoveries）同样报喜；播报由主窗去重，这里只负责说。
+  // 气泡是小窗里的稀缺空间：告警只展开第一条（超长截断），其余计数，恢复报喜始终保留
+  void globalThis.__TAURI__?.event?.listen?.('pet-speak', (e) => {
+    const p = e?.payload || {};
+    const clip = (s, n = 26) => (s.length > n ? `${s.slice(0, n)}…` : s);
+    const all = (p.lines || []).map((l) => clip(escapeHtml(String(l))));
+    const recoveries = (p.recoveries || []).map((n) => escapeHtml(String(n)));
+    if (!all.length && !recoveries.length) return;
+    const parts = [];
+    if (all.length) {
+      parts.push(`<b>主人，注意！${all.length} 项额度要关注：</b>`);
+      parts.push(`· ${all[0]}`);
+      if (all.length > 1) parts.push(`……其余 ${all.length - 1} 项见主界面`);
+    }
+    if (recoveries.length) {
+      parts.push(`<b>${all.length ? '另外～' : '好消息！'}${recoveries.join('、')} 恢复正常啦 🎉</b>`);
+    }
+    showBubble(parts.join('<br>'), { lingerMs: 15000, tall: true });
+    playPetMotion();
+  });
 
   /// 给不 settable 的库 Promise 加超时：Live2DModel.from 在个别加载失败场景
   /// 既不 resolve 也不 reject，会把换装锁（skinLoading）永久卡死——表现为

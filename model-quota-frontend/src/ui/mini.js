@@ -1,5 +1,6 @@
 import { evaluateProvider, remainingQuotaOf } from '../core/status.js';
 import { escapeHtml, formatMoney, formatNumber, formatDateTime } from './format.js';
+import { updateTrayStatus } from './trayStatus.js';
 
 // 迷你小窗口视图（#mini / ?view=mini）：无边框紧凑列表 + 微型进度条，主题跟随全局（mqc.theme）。
 // 标题栏自绘：按住可拖动窗口，关闭按钮隐藏窗口（桌面壳）/ 关闭标签页（浏览器弹窗）。
@@ -23,6 +24,8 @@ export function renderMini({ root, repo, logger, service }) {
     } finally {
       busy = false;
       render();
+      // 迷你窗也能触发刷新：同步托盘动态图标（网页版为空操作）
+      void updateTrayStatus(repo, repo.loadSettings());
     }
   }
 

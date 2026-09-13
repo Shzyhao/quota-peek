@@ -3,12 +3,14 @@ import { sortProviders, filterProviders, collectAlerts } from '../core/status.js
 import { normalizeProviderConfig } from '../core/storage.js';
 import { buildBackup, parseBackup, applyBackup } from '../core/backup.js';
 import { getStoredTheme, setStoredTheme, applyTheme, THEMES } from '../core/theme.js';
+import { secretsAvailable, readSecret, writeSecret, deleteSecret, migrateSecretsToKeyring } from '../core/secrets.js';
 import { openProviderForm } from './form.js';
 import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
 import { chatView, mountChatPage } from './chatView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
 import { mountPetAppearanceCard } from './petSettings.js';
+import { updateTrayStatus } from './trayStatus.js';
 
 const NAV_ITEMS = [
   { view: 'home', label: '首页', icon: 'M4 11l8-7 8 7M6 10v9h12v-9' },
@@ -47,22 +49,50 @@ export function renderApp({ root, repo, logger, service }) {
   // 悬浮形态：pet（Live2D 桌宠）/ ball（经典悬浮球），由后端 ball-form-changed 事件驱动
   let ballForm = 'pet';
   const tauriEvents = globalThis.__TAURI__?.event;
+  const tauriInvoke = globalThis.__TAURI__?.core?.invoke;
 
-  // ——— 低额度提醒（'popup' 界面弹窗 / 'notify' 桌面系统通知 / '' 关闭）———
+  // ——— 数据变化后的统一出口：托盘动态图标 + 低额度提醒 ———
+  function afterDataChange() {
+    void updateTrayStatus(repo, settings);
+    void maybeAlert();
+  }
+
+  // ——— 低额度提醒（'' 关闭 / 'popup' 界面弹窗 / 'notify' 系统通知 / 'pet' 桌宠播报）———
   async function maybeAlert() {
     if (!settings.alertMethod) return;
     const alerts = collectAlerts(repo.listProviders(), settings);
+    // 恢复检测：从告警集合消失且供应商仍存在的 id 记为恢复（桌宠播报用）
+    const recovered = [];
     for (const id of [...alertedIds]) {
-      if (!alerts.some((a) => a.id === id)) alertedIds.delete(id);
+      if (!alerts.some((a) => a.id === id)) {
+        alertedIds.delete(id);
+        const p = repo.getProvider(id);
+        if (p) recovered.push(p.name);
+      }
     }
     const fresh = alerts.filter((a) => !alertedIds.has(a.id));
-    if (!fresh.length) return;
+    if (!fresh.length && !recovered.length) return;
     fresh.forEach((a) => alertedIds.add(a.id));
+
+    if (settings.alertMethod === 'pet') {
+      const petOpen = ballOn && ballForm !== 'ball';
+      if (petOpen && tauriEvents) {
+        tauriEvents.emit('pet-speak', {
+          lines: fresh.map((a) => `${a.name}：${a.reasons.join('；')}`),
+          recoveries: recovered,
+        });
+        return;
+      }
+      // 桌宠未开启：仅恢复时静默，有新告警才回退界面弹窗
+      if (!fresh.length) return;
+    }
+    if (!fresh.length) return;
+
     const title = `低额度提醒：${fresh.length} 家需要关注`;
     const body = fresh.map((a) => `【${a.name}】${a.reasons.join('；')}`).join('\n');
     // 系统通知走桌面壳原生 Toast；网页版（无 __TAURI__）回退界面弹窗
-    if (settings.alertMethod === 'notify' && globalThis.__TAURI__?.event) {
-      globalThis.__TAURI__.event.emit('show-notify', { title, body });
+    if (settings.alertMethod === 'notify' && tauriEvents) {
+      tauriEvents.emit('show-notify', { title, body });
       return;
     }
     await styledConfirm({
@@ -81,6 +111,15 @@ export function renderApp({ root, repo, logger, service }) {
       clearInterval(autoTimer);
       autoTimer = null;
     }
+    if (tauriInvoke) {
+      // 桌面版：时钟在后端常驻线程（refresh.json 持久化，到点 emit backend-refresh-due），
+      // 不受 WebView 隐藏窗口定时器节流影响
+      tauriInvoke('set_refresh_schedule', {
+        enabled: settings.autoRefreshMinutes > 0,
+        intervalMinutes: settings.autoRefreshMinutes,
+      }).catch(() => {});
+      return;
+    }
     if (settings.autoRefreshMinutes > 0) {
       autoTimer = setInterval(() => {
         void refreshAll({ silent: true });
@@ -97,7 +136,7 @@ export function renderApp({ root, repo, logger, service }) {
     } finally {
       busy = false;
       render();
-      void maybeAlert();
+      afterDataChange();
     }
   }
 
@@ -110,19 +149,19 @@ export function renderApp({ root, repo, logger, service }) {
     } finally {
       busy = false;
       render();
-      void maybeAlert();
+      afterDataChange();
     }
   }
 
   // ——— 供应商表单 ———
-  function saveProviderFromForm(data) {
+  async function saveProviderFromForm(data) {
     const existing = data.id ? repo.getProvider(data.id) : null;
     const type = getProviderType(data.type);
     const config = normalizeProviderConfig({
       ...data,
-      // 编辑时密钥输入留空表示沿用原密钥，前端从不回显明文
-      apiKey: data.apiKey || (existing ? existing.apiKey : ''),
-      apiSecret: data.apiSecret || (existing ? existing.apiSecret : ''),
+      // 密钥先置空，桌面版写入凭据管理器后留 hasSecret 标记；浏览器版在下方回填
+      apiKey: '',
+      apiSecret: '',
       lastQuery: existing ? existing.lastQuery : null,
     });
     if (!type.autoQuery) {
@@ -136,8 +175,28 @@ export function renderApp({ root, repo, logger, service }) {
         error: null,
       };
     }
+    if (secretsAvailable()) {
+      // 桌面版：密钥只进系统凭据管理器，本地记录零明文；输入留空 = 沿用已存密钥
+      const typedKey = String(data.apiKey || '').trim();
+      const typedSecret = String(data.apiSecret || '').trim();
+      if (typedKey || typedSecret) {
+        const prev = existing?.hasSecret ? await readSecret(existing.id).catch(() => null) : null;
+        await writeSecret(config.id, {
+          apiKey: typedKey || prev?.apiKey || '',
+          apiSecret: typedSecret || prev?.apiSecret || '',
+        }).catch(() => {});
+        config.hasSecret = true;
+      } else if (existing?.hasSecret) {
+        config.hasSecret = true;
+      }
+    } else {
+      // 浏览器版：无系统凭据可用，沿用原行为（密钥随记录存 localStorage）
+      config.apiKey = String(data.apiKey || '').trim() || (existing ? existing.apiKey : '');
+      config.apiSecret = String(data.apiSecret || '').trim() || (existing ? existing.apiSecret : '');
+    }
     repo.saveProvider(config);
     render();
+    afterDataChange();
   }
 
   function openForm(existing) {
@@ -198,9 +257,12 @@ export function renderApp({ root, repo, logger, service }) {
     });
     if (!ok) return false;
     applyBackup(repo, parsed.backup);
+    // 桌面版：导入记录中的明文密钥即时搬进凭据管理器并抹掉本地明文
+    await migrateSecretsToKeyring(repo).catch(() => {});
     settings = repo.loadSettings();
     scheduleAutoRefresh();
     render();
+    afterDataChange();
     return true;
   }
 
@@ -225,7 +287,9 @@ export function renderApp({ root, repo, logger, service }) {
     });
     if (!ok) return;
     repo.deleteProvider(id);
+    if (cfg.hasSecret) void deleteSecret(id).catch(() => {});
     render();
+    afterDataChange();
   }
 
   async function clearLogs() {
@@ -251,12 +315,19 @@ export function renderApp({ root, repo, logger, service }) {
       danger: true,
     });
     if (!ok) return;
+    // 桌面版同步清理凭据管理器中对应条目
+    if (secretsAvailable()) {
+      repo.listProviders().forEach((p) => {
+        if (p.hasSecret) void deleteSecret(p.id).catch(() => {});
+      });
+    }
     repo.clearAll();
     settings = repo.loadSettings();
     uiState.query = '';
     uiState.statusFilter = 'all';
     scheduleAutoRefresh();
     render();
+    void updateTrayStatus(repo, settings);
   }
 
   // ——— 主题 ———
@@ -484,10 +555,16 @@ export function renderApp({ root, repo, logger, service }) {
       syncBallUi();
     });
     tauriEvents.emit('ball-form-request');
+    // 后端定时调度（或托盘菜单「立即刷新」）触发的刷新：时钟在 Rust，执行在这里
+    void tauriEvents.listen('backend-refresh-due', () => {
+      void refreshAll({ silent: true });
+    });
   }
 
   scheduleAutoRefresh();
   render();
+  // 启动即按当前数据刷新托盘图标与告警状态（首次运行托盘仍是静态默认图标）
+  afterDataChange();
 
   return { refreshAll, refreshOne, render, importFromText, exportBackup, deleteProvider, clearAll };
 }

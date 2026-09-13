@@ -736,3 +736,84 @@ describe('桌面悬浮球开关（顶栏按钮 + 设置页）', () => {
     expect(emitted).toContainEqual(['set-ball', true]);
   });
 });
+
+describe('低额度提醒 · 桌宠播报（alertMethod=pet）', () => {
+  const lowBalanceBody = { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '5.00' }] };
+  const okBodyHigh = { is_available: true, balance_infos: [{ currency: 'CNY', total_balance: '500.00' }] };
+
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  function seedPetEnv() {
+    const emitted = [];
+    const handlers = {};
+    globalThis.__TAURI__ = {
+      event: {
+        emit: (name, payload) => emitted.push([name, payload]),
+        // renderApp 内 listen(name, cb)：捕获处理器供测试驱动广播
+        listen: (name, cb) => {
+          handlers[name] = cb;
+          return Promise.resolve(() => {});
+        },
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => lowBalanceBody }));
+    const { root } = seedApp([deepseek()], { view: 'settings' });
+    const select = root.querySelector('[data-setting-alertmethod]');
+    select.value = 'pet';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return { root, emitted, handlers };
+  }
+
+  it('桌宠开启：告警走 pet-speak 播报（含供应商与原因），不弹界面弹窗', async () => {
+    const { root, emitted, handlers } = seedPetEnv();
+    try {
+      await handlers['ball-state-changed']({ payload: true });
+      navTo(root, 'overview');
+      root.querySelector('[data-action="refresh-all"]').click();
+      await vi.waitFor(() => {
+        const hit = emitted.find(([name]) => name === 'pet-speak');
+        expect(hit).toBeTruthy();
+        expect(hit[1].lines[0]).toContain('DeepSeek 主账号');
+        expect(hit[1].lines[0]).toContain('余额过低');
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(document.querySelector('.confirm-modal')).toBeFalsy();
+    } finally {
+      document.body.innerHTML = '';
+    }
+  });
+
+  it('告警恢复 → pet-speak 携带 recoveries 报喜；popup/notify 不受恢复影响', async () => {
+    const { root, emitted, handlers } = seedPetEnv();
+    try {
+      await handlers['ball-state-changed']({ payload: true });
+      root.querySelector('[data-action="refresh-all"]').click();
+      await vi.waitFor(() => expect(emitted.some(([name]) => name === 'pet-speak')).toBe(true));
+
+      // 余额回升 → 告警消失 → 恢复播报
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => okBodyHigh }));
+      root.querySelector('[data-action="refresh-all"]').click();
+      await vi.waitFor(() => {
+        const hit = emitted.filter(([name]) => name === 'pet-speak').at(-1);
+        expect(hit[1].recoveries).toContain('DeepSeek 主账号');
+      });
+    } finally {
+      document.body.innerHTML = '';
+    }
+  });
+
+  it('桌宠未开启：回退界面弹窗（弹窗语义不变）', async () => {
+    const { root, emitted } = seedPetEnv();
+    try {
+      // 未广播 ball-state-changed(true)：ballOn 保持 false（桌宠未开启）
+      root.querySelector('[data-action="refresh-all"]').click();
+      await vi.waitFor(() => expect(document.querySelector('.confirm-modal')).toBeTruthy());
+      expect(emitted.some(([name]) => name === 'pet-speak')).toBe(false);
+      document.querySelector('.confirm-modal [data-action="confirm-accept"]').click();
+    } finally {
+      document.body.innerHTML = '';
+    }
+  });
+});

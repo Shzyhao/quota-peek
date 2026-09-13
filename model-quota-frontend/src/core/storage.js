@@ -55,6 +55,8 @@ export function normalizeProviderConfig(input) {
     baseUrl: String(input.baseUrl || '').trim(),
     // AI 对话 / 文件分析使用的默认模型（留空用类型注册表的 defaultChatModel）
     chatModel: String(input.chatModel || '').trim(),
+    // 桌面版标记：密钥已存入系统凭据管理器，本地记录不含明文（见 core/secrets.js）
+    hasSecret: input.hasSecret === true,
     planTotalQuota: toNumberOrNull(input.planTotalQuota),
     usedQuota: toNumberOrNull(input.usedQuota),
     remainingQuota: toNumberOrNull(input.remainingQuota),

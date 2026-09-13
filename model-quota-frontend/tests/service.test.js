@@ -253,3 +253,40 @@ describe('Coding Plan 供应商刷新（智谱 / MiniMax）', () => {
     expect(logger.list()[0].status).toBe('ok');
   });
 });
+
+describe('createQuotaService 密钥解析注入（桌面版凭据管理器）', () => {
+  it('resolveSecrets 覆盖记录中的密钥：查询与日志净化都用解析值', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
+    const repo = createRepository(memoryStorage());
+    const logger = createLogger(repo);
+    // 记录不含明文（hasSecret 标记），密钥由解析器从凭据管理器语义地提供
+    const cfg = repo.saveProvider(
+      normalizeProviderConfig({ name: 'DS', type: 'deepseek', apiKey: '', hasSecret: true }),
+    );
+    const service = createQuotaService({
+      repo,
+      logger,
+      fetchImpl,
+      resolveSecrets: async () => ({ apiKey: 'sk-keyring-secret', apiSecret: '' }),
+    });
+
+    const updated = await service.refreshProvider(cfg.id);
+
+    expect(updated.lastQuery.status).toBe('failed');
+    // 实际发出的请求带了解析出的密钥
+    expect(fetchImpl.mock.calls[0][1].headers.Authorization).toContain('sk-keyring-secret');
+    // 错误信息回显密钥时被解析值净化
+    const failing = await service.refreshProvider(cfg.id);
+    void failing;
+    expect(logger.list().at(-1).error).not.toContain('sk-keyring-secret');
+  });
+
+  it('默认解析器（浏览器版）：沿用记录明文字段', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => okBody });
+    const { repo, service } = setup(fetchImpl);
+    const cfg = repo.saveProvider(deepseekProvider());
+    const updated = await service.refreshProvider(cfg.id);
+    expect(updated.lastQuery.status).toBe('ok');
+    expect(fetchImpl.mock.calls[0][1].headers.Authorization).toContain('sk-test-1234567890');
+  });
+});

@@ -5,9 +5,11 @@ import { remainingQuotaOf } from './status.js';
 // 刷新编排：
 // - 支持自动查询的类型（当前为 DeepSeek）调用官方 API，成功/失败都更新 lastQuery 并写日志；
 // - 不支持自动查询的类型只标记状态，不发起任何请求、不写日志（没有真正发生查询）；
-// - 手动刷新单个 / 一键刷新全部 / 定时刷新（由 UI 层按设置调度 refreshAll）。
-export function createQuotaService({ repo, logger, fetchImpl } = {}) {
+// - 手动刷新单个 / 一键刷新全部 / 定时刷新（桌面版由后端调度事件驱动，网页版由 UI 层调度）。
+// - 密钥经 resolveSecrets 注入：桌面版从凭据管理器取（main.js 接线），默认用记录本身的明文字段。
+export function createQuotaService({ repo, logger, fetchImpl, resolveSecrets } = {}) {
   const getFetch = () => fetchImpl || globalThis.fetch;
+  const resolve = resolveSecrets || ((cfg) => Promise.resolve({ apiKey: cfg.apiKey || '', apiSecret: cfg.apiSecret || '' }));
 
   function markUnsupported(cfg) {
     const updated = {
@@ -28,11 +30,12 @@ export function createQuotaService({ repo, logger, fetchImpl } = {}) {
     }
 
     const time = new Date().toISOString();
-    const secrets = [cfg.apiKey, cfg.apiSecret].filter(Boolean);
+    const resolved = await resolve(cfg);
+    const secrets = [resolved.apiKey, resolved.apiSecret].filter(Boolean);
     try {
       const result = await type.query({
-        apiKey: cfg.apiKey,
-        apiSecret: cfg.apiSecret,
+        apiKey: resolved.apiKey,
+        apiSecret: resolved.apiSecret,
         baseUrl: cfg.baseUrl || type.defaultBaseUrl,
         fetchImpl: getFetch(),
       });
@@ -64,7 +67,7 @@ export function createQuotaService({ repo, logger, fetchImpl } = {}) {
       );
       return updated;
     } catch (err) {
-      const message = sanitizeText(err?.message || String(err), [cfg.apiKey, cfg.apiSecret].filter(Boolean));
+      const message = sanitizeText(err?.message || String(err), secrets);
       const updated = {
         ...cfg,
         lastQuery: { time, status: 'failed', balance: null, currency: null, usage: null, extraLine: null, error: message },

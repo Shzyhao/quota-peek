@@ -15,9 +15,7 @@ use tauri_plugin_notification::NotificationExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-mod commands;
-
-/// 迷你窗逻辑尺寸（与 open_mini / 前端样式保持一致）
+mod commands;/// 迷你窗逻辑尺寸（与 open_mini / 前端样式保持一致）
 const MINI_W: f64 = 300.0;
 const MINI_H: f64 = 430.0;
 /// 经典悬浮球窗口尺寸（球体 60px + 辉光余量，前端 .ball 呈现圆形）
@@ -154,6 +152,7 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let ball_on = app.webview_windows().get("ball").is_some();
     let thing = if prefs.is_pet() { "桌宠" } else { "悬浮球" };
     let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let refresh = MenuItem::with_id(app, "refresh", "立即刷新", true, None::<&str>)?;
     let mini = MenuItem::with_id(app, "mini", "迷你小窗", true, None::<&str>)?;
     let ball = MenuItem::with_id(
         app,
@@ -170,7 +169,7 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         None::<&str>,
     )?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    Menu::with_items(app, &[&show, &mini, &ball, &form, &quit])
+    Menu::with_items(app, &[&show, &refresh, &mini, &ball, &form, &quit])
 }
 
 /// 创建悬浮窗（桌宠或经典球，位置：已保存的物理坐标，否则主显示器右侧偏上）。
@@ -395,6 +394,7 @@ pub fn run() {
         // 原生文件选择对话框（文件分析模块选文件，返回绝对路径）
         .plugin(tauri_plugin_dialog::init())
         // 桌宠 AI 对话 + 文件分析命令（流式 Channel + 凭据管理器密钥 + 连接测试 + 轻析管线）
+        // 额度密钥（quota_secret_*）/ 后端定时刷新调度 / 托盘动态图标同走命令层
         .invoke_handler(tauri::generate_handler![
             commands::chat_get_config,
             commands::chat_save_config,
@@ -409,7 +409,13 @@ pub fn run() {
             commands::analyze_get_history,
             commands::analyze_delete_history,
             commands::analyze_clear_history,
-            commands::pet_import_model
+            commands::pet_import_model,
+            commands::quota_secret_set,
+            commands::quota_secret_get,
+            commands::quota_secret_has,
+            commands::quota_secret_delete,
+            commands::set_refresh_schedule,
+            commands::update_tray_status
         ])
         .setup(|app| {
             let prefs = load_prefs(app.app_handle());
@@ -421,6 +427,17 @@ pub fn run() {
             // 桌宠 AI 对话状态（配置 + 凭据 + 流式取消标志）
             app.manage(commands::ChatState::new(app.app_handle()));
 
+            // 后端定时刷新调度：Rust 常驻线程持有时钟（配置持久化 refresh.json，重启恢复），
+            // 到点 emit backend-refresh-due 由主窗执行既有前端刷新编排
+            let refresh_prefs = commands::load_refresh_prefs(app.app_handle());
+            let sched = std::sync::Arc::new(commands::RefreshSchedule {
+                prefs: Mutex::new(refresh_prefs),
+                seq: Mutex::new(0),
+                cond: std::sync::Condvar::new(),
+            });
+            commands::spawn_refresh_scheduler(app.app_handle().clone(), sched.clone());
+            app.manage(sched);
+
             let tray = TrayIconBuilder::with_id("quota-tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("桌看 · 左键显示/隐藏主窗口，关闭窗口将驻留托盘")
@@ -428,6 +445,10 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main(app),
+                    // 立即刷新：与后端定时调度同一事件通道，由主窗执行刷新编排
+                    "refresh" => {
+                        let _ = app.emit("backend-refresh-due", ());
+                    }
                     "mini" => open_mini(app),
                     "ball" => toggle_ball(app),
                     "form" => {

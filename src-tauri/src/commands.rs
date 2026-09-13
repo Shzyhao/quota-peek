@@ -15,7 +15,7 @@ use liteai_core::{
 use liteai_model::OpenAiClient;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// 凭据管理器 service 名（与轻析的 com.liteai.analyzer 隔离）
 const KEYRING_SERVICE: &str = "com.modelquota.desktop";
@@ -501,4 +501,178 @@ pub fn pet_import_model(app: AppHandle, src: String) -> Result<serde_json::Value
 pub fn analyze_clear_history(app: AppHandle) -> Result<(), String> {
     let dir = app.path().app_config_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     liteai_config::clear_history(&dir)
+}
+
+// ——— 额度供应商密钥（Windows 凭据管理器） ———
+// 与对话密钥同一 service（com.modelquota.desktop），条目键 `quota_key:<provider_id>`，
+// 值为 {apiKey, apiSecret} JSON（双凭证类型如火山 IAM 一条存齐）。
+// 前端 localStorage 只留 hasSecret 标记，明文密钥不落盘。
+
+const QUOTA_KEY_PREFIX: &str = "quota_key:";
+
+#[tauri::command]
+pub fn quota_secret_set(
+    state: State<'_, ChatState>,
+    provider_id: String,
+    api_key: String,
+    api_secret: String,
+) -> Result<(), String> {
+    let value = serde_json::json!({ "apiKey": api_key, "apiSecret": api_secret }).to_string();
+    state
+        .secrets
+        .set(&format!("{QUOTA_KEY_PREFIX}{provider_id}"), &value)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn quota_secret_get(state: State<'_, ChatState>, provider_id: String) -> Result<Option<serde_json::Value>, String> {
+    let raw = state
+        .secrets
+        .get(&format!("{QUOTA_KEY_PREFIX}{provider_id}"))
+        .map_err(|e| e.to_string())?;
+    Ok(raw.and_then(|r| serde_json::from_str(&r).ok()))
+}
+
+#[tauri::command]
+pub fn quota_secret_has(state: State<'_, ChatState>, provider_id: String) -> Result<bool, String> {
+    state
+        .secrets
+        .get(&format!("{QUOTA_KEY_PREFIX}{provider_id}"))
+        .map(|k| k.is_some())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn quota_secret_delete(state: State<'_, ChatState>, provider_id: String) -> Result<(), String> {
+    state
+        .secrets
+        .delete(&format!("{QUOTA_KEY_PREFIX}{provider_id}"))
+        .map_err(|e| e.to_string())
+}
+
+// ——— 后端定时刷新调度（时钟在 Rust 常驻线程） ———
+// 前端把设置页的刷新间隔同步过来；到点 emit `backend-refresh-due`，由主窗
+// （WebView 常驻，IPC 事件不受隐藏窗口定时器节流影响）执行既有 JS 刷新编排。
+
+/// 调度共享状态：配置 + 变更序号（Condvar 唤醒调度线程重算下一轮）
+pub struct RefreshSchedule {
+    pub prefs: Mutex<RefreshPrefs>,
+    pub seq: Mutex<u64>,
+    pub cond: std::sync::Condvar,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RefreshPrefs {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub interval_minutes: u64,
+}
+
+#[tauri::command]
+pub fn set_refresh_schedule(
+    app: AppHandle,
+    sched: State<'_, std::sync::Arc<RefreshSchedule>>,
+    enabled: bool,
+    interval_minutes: u64,
+) -> Result<(), String> {
+    let prefs = RefreshPrefs {
+        enabled: enabled && interval_minutes > 0,
+        interval_minutes,
+    };
+    persist_refresh_prefs(&app, &prefs)?;
+    *sched.prefs.lock().unwrap() = prefs;
+    *sched.seq.lock().unwrap() += 1;
+    sched.cond.notify_all();
+    Ok(())
+}
+
+fn refresh_prefs_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("refresh.json"))
+}
+
+fn persist_refresh_prefs(app: &AppHandle, prefs: &RefreshPrefs) -> Result<(), String> {
+    let path = refresh_prefs_path(app).ok_or("无法定位配置目录")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let raw = serde_json::to_string(prefs).map_err(|e| e.to_string())?;
+    std::fs::write(path, raw).map_err(|e| e.to_string())
+}
+
+pub fn load_refresh_prefs(app: &AppHandle) -> RefreshPrefs {
+    refresh_prefs_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or(RefreshPrefs { enabled: false, interval_minutes: 0 })
+}
+
+/// 调度线程：序号变化（前端同步配置）即重算下一轮触发点；到点发事件后重新计时
+pub fn spawn_refresh_scheduler(app: AppHandle, sched: std::sync::Arc<RefreshSchedule>) {
+    std::thread::spawn(move || {
+        let mut seen_seq: u64 = 0;
+        let mut next_fire: Option<std::time::Instant> = None;
+        loop {
+            let (prefs, seq) = {
+                let prefs = sched.prefs.lock().unwrap().clone();
+                let seq = *sched.seq.lock().unwrap();
+                (prefs, seq)
+            };
+            if seq != seen_seq {
+                seen_seq = seq;
+                next_fire = if prefs.enabled && prefs.interval_minutes > 0 {
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(prefs.interval_minutes * 60))
+                } else {
+                    None
+                };
+            }
+            match next_fire {
+                None => {
+                    // 关闭状态：挂起等待，直到前端同步了新配置（序号变化被 notify 唤醒、谓词转假返回）
+                    let guard = sched.prefs.lock().unwrap();
+                    let _waited = sched.cond.wait_while(guard, |_inner: &mut RefreshPrefs| {
+                        *sched.seq.lock().unwrap() == seen_seq
+                    });
+                }
+                Some(deadline) => {
+                    let now = std::time::Instant::now();
+                    if now >= deadline {
+                        let _ = app.emit("backend-refresh-due", ());
+                        let interval = {
+                            let prefs = sched.prefs.lock().unwrap().clone();
+                            prefs.interval_minutes.max(1)
+                        };
+                        next_fire = Some(std::time::Instant::now() + std::time::Duration::from_secs(interval * 60));
+                    } else {
+                        let guard = sched.prefs.lock().unwrap();
+                        let _ = sched.cond.wait_timeout_while(guard, deadline - now, |_inner: &mut RefreshPrefs| {
+                            *sched.seq.lock().unwrap() == seen_seq
+                        });
+                    }
+                }
+            }
+        }
+    });
+}
+
+// ——— 托盘动态图标 ———
+// 前端按当前全局健康度绘制 32×32 RGBA（底色=严重度、白字=最高用量%），
+// 连同多行摘要 tooltip 一起推送；Rust 只做托盘更新胶水。
+
+#[tauri::command]
+pub fn update_tray_status(
+    app: AppHandle,
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+    tooltip: String,
+) -> Result<(), String> {
+    if rgba.len() as u64 != width as u64 * height as u64 * 4 {
+        return Err("图标像素数据大小不符".into());
+    }
+    let tray = app.tray_by_id("quota-tray").ok_or("托盘不可用")?;
+    tray.set_icon(Some(tauri::image::Image::new_owned(rgba, width, height)))
+        .map_err(|e| e.to_string())?;
+    tray.set_tooltip(Some(if tooltip.is_empty() { "桌看".to_string() } else { tooltip }))
+        .map_err(|e| e.to_string())
 }

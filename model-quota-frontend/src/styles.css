@@ -1892,6 +1892,12 @@ html.pet-mode #app {
   right: 8px;
   bottom: 8px;
   max-height: 62%;
+
+  /* 播报类长内容（桌宠告警台词）临时加高，避免恢复报喜等尾部信息被裁切 */
+  &.tall {
+    max-height: 86%;
+    font-size: 12px;
+  }
   overflow-y: auto;
   padding: 10px 12px;
   border-radius: 12px;

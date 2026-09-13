@@ -8,6 +8,7 @@ import {
   isChatAvailable, getChatConfig, saveChatConfig, setChatKey, hasChatKey,
   deleteChatKey, testChatConnection, sendChat, cancelChat,
 } from '../core/chat.js';
+import { readSecret } from '../core/secrets.js';
 import { escapeHtml } from './format.js';
 
 export function chatView() {
@@ -274,8 +275,14 @@ export function mountChatPage(el, { repo }) {
       config.profiles = config.profiles.filter((x) => x.id !== prof.id);
       config.profiles.push(prof);
       if (!config.activeProfileId) config.activeProfileId = prof.id;
-      if (p.apiKey) {
-        await setChatKey(prof.id, p.apiKey);
+      // 密钥随导入写入对话凭据管理器：桌面版从额度密钥条目读（记录只有标记），浏览器版读记录明文
+      let importKey = p.apiKey || '';
+      if (!importKey && p.hasSecret) {
+        const s = await readSecret(p.id).catch(() => null);
+        importKey = s?.apiKey || '';
+      }
+      if (importKey) {
+        await setChatKey(prof.id, importKey);
       } else if (!(await hasChatKey(prof.id).catch(() => false))) {
         testResult = `「${p.name}」未存 API Key，导入后无法调用：请在供应商表单补 Key 后再同步`;
         showTestResult();

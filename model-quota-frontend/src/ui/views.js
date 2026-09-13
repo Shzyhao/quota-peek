@@ -137,6 +137,17 @@ export function providerCard(p, settings) {
 
   const usageDetail = last && last.status === 'ok' ? usageDetailText(p) : null;
 
+  // 密钥展示：桌面版密钥在系统凭据管理器（本地只有标记），浏览器版脱敏显示明文尾部
+  const keyLabel = type.credentialLabel || 'API Key';
+  const keyRow = p.hasSecret
+    ? `<div class="meta-row"><span>${escapeHtml(keyLabel)}</span><b>已存入系统凭据管理器 🔒</b></div>`
+    : `<div class="meta-row"><span>${escapeHtml(keyLabel)}</span><b class="mono">${p.apiKey ? maskApiKey(p.apiKey) : '未配置'}</b></div>`;
+  const secretRow = p.apiSecret
+    ? `<div class="meta-row"><span>Secret Key</span><b class="mono">${maskApiKey(p.apiSecret)}</b></div>`
+    : p.hasSecret && type.needsSecret
+      ? '<div class="meta-row"><span>Secret Key</span><b>已存入系统凭据管理器 🔒</b></div>'
+      : '';
+
   function expiryText() {
     if (!p.expiryDate) return '—';
     const d = daysUntil(p.expiryDate);
@@ -166,8 +177,8 @@ export function providerCard(p, settings) {
         <div class="meta-row"><span>到期时间</span><b>${expiryText()}</b></div>
         <div class="meta-row"><span>查询状态</span><b>${queryStatusLabel}</b></div>
         <div class="meta-row"><span>最后更新</span><b>${formatDateTime(last ? last.time : null)}</b></div>
-          <div class="meta-row"><span>${escapeHtml(type.credentialLabel || 'API Key')}</span><b class="mono">${p.apiKey ? maskApiKey(p.apiKey) : '未配置'}</b></div>
-          ${p.apiSecret ? `<div class="meta-row"><span>Secret Key</span><b class="mono">${maskApiKey(p.apiSecret)}</b></div>` : ''}
+          ${keyRow}
+          ${secretRow}
         ${usageDetail ? `<div class="meta-row"><span>套餐详情</span><b>${escapeHtml(usageDetail)}</b></div>` : ''}
         ${p.note ? `<div class="meta-row"><span>备注</span><b>${escapeHtml(p.note)}</b></div>` : ''}
       </div>
@@ -349,10 +360,11 @@ export function settingsView(ctx) {
               <option value="" ${settings.alertMethod === '' ? 'selected' : ''}>关闭</option>
               <option value="popup" ${settings.alertMethod === 'popup' ? 'selected' : ''}>界面弹窗</option>
               <option value="notify" ${settings.alertMethod === 'notify' ? 'selected' : ''}>系统通知</option>
+              <option value="pet" ${settings.alertMethod === 'pet' ? 'selected' : ''}>桌宠播报</option>
             </select>
           </label>
         </div>
-        <p class="settings-hint">刷新后检测到新的余额 / 额度 / 到期 / 查询失败告警时提醒（同一告警只提醒一次，恢复正常后重新计数）；系统通知为 Windows 原生 Toast，网页版自动回退界面弹窗。</p>
+        <p class="settings-hint">刷新后检测到新的余额 / 额度 / 到期 / 查询失败告警时提醒（同一告警只提醒一次，恢复正常后重新计数，恢复时桌宠也会报喜）。桌宠播报 = 桌宠气泡说话并做小动作，桌宠未开启时回退界面弹窗；系统通知为 Windows 原生 Toast，网页版自动回退界面弹窗。</p>
       </section>
 
       <section class="settings-card">
@@ -380,7 +392,9 @@ export function settingsView(ctx) {
       ${isDesktop ? petAppearanceCard() : ""}
       <section class="settings-card">
         <h3>数据备份</h3>
-        <p class="settings-hint">所有数据保存在本浏览器 localStorage。可导出 JSON 备份，或从备份文件恢复。<br>⚠ 备份文件包含 API Key 明文，请妥善保管，不要分享给他人。</p>
+        <p class="settings-hint">${isDesktop
+          ? '所有数据保存在本机（密钥在系统凭据管理器，配置在应用数据目录）。可导出 JSON 备份，或从备份文件恢复。<br>⚠ 桌面版备份文件不含密钥，导入到新机器后需重新录入各供应商密钥。'
+          : '所有数据保存在本浏览器 localStorage。可导出 JSON 备份，或从备份文件恢复。<br>⚠ 备份文件包含 API Key 明文，请妥善保管，不要分享给他人。'}</p>
         <div class="settings-actions">
           <button class="btn" data-action="export-backup">⬇ 导出备份</button>
           <button class="btn" data-action="import-backup">⬆ 导入备份</button>
