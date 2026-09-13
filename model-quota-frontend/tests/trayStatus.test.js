@@ -42,17 +42,16 @@ const balanceProvider = (overrides = {}) =>
   });
 
 describe('computeTrayStatus', () => {
-  it('无供应商 → idle 灰、无角标', () => {
+  it('无供应商 → idle 灰', () => {
     const s = computeTrayStatus([], settings);
     expect(s.level).toBe('idle');
-    expect(s.badge).toBeNull();
     expect(s.tooltip).toContain('桌看');
   });
 
-  it('全部正常 → ok 绿；角标取用量型最高值（5h/周取大者）', () => {
+  it('全部正常 → ok 绿（不再携带用量角标，图标统一显示 ZK）', () => {
     const s = computeTrayStatus([usageProvider(), balanceProvider()], settings);
     expect(s.level).toBe('ok');
-    expect(s.badge).toBe(45); // max(32.5, 45)
+    expect(s).not.toHaveProperty('badge');
   });
 
   it('低余额告警 → warn 琥珀，tooltip 列出供应商', () => {
@@ -68,11 +67,9 @@ describe('computeTrayStatus', () => {
     expect(computeTrayStatus([p], settings).level).toBe('error');
   });
 
-  it('停用供应商不参与级别与角标', () => {
+  it('停用供应商不参与级别判定', () => {
     const p = usageProvider({ enabled: false });
-    const s = computeTrayStatus([p], settings);
-    expect(s.level).toBe('idle');
-    expect(s.badge).toBeNull();
+    expect(computeTrayStatus([p], settings).level).toBe('idle');
   });
 
   it('tooltip 超 128 字符截断（Windows 上限）', () => {
@@ -107,7 +104,7 @@ describe('updateTrayStatus', () => {
     vi.restoreAllMocks();
   });
 
-  it('桌面版：绘制 32×32 RGBA 并调用 update_tray_status', () => {
+  it('桌面版：绘制 32×32 RGBA + 白字 ZK 并调用 update_tray_status', () => {
     const invoke = vi.fn().mockResolvedValue(null);
     globalThis.__TAURI__ = { core: { invoke } };
     const repo = createRepository(memoryStorage());
@@ -122,20 +119,20 @@ describe('updateTrayStatus', () => {
     expect(args.height).toBe(32);
     expect(args.rgba).toHaveLength(32 * 32 * 4);
     expect(args.tooltip.length).toBeGreaterThan(0);
+    // 图标内容：1 个底色圆角方块 + 居中 ZK（不再显示用量数字）
+    expect(ctxStub.roundRect).toHaveBeenCalledTimes(1);
+    expect(ctxStub.fillText).toHaveBeenCalledWith('ZK', 16, 17);
   });
 
-  it('无用量数据（纯余额型）画三柱条而非数字，图标永不为纯色块', () => {
+  it('有告警时同样绘制 ZK，仅底色不同', () => {
     const invoke = vi.fn().mockResolvedValue(null);
     globalThis.__TAURI__ = { core: { invoke } };
     const repo = createRepository(memoryStorage());
-    repo.saveProvider(balanceProvider());
+    repo.saveProvider(balanceProvider({ lastQuery: { time: '2026-09-13T08:00:00.000Z', status: 'failed', balance: null, currency: null, error: '401' } }));
 
     updateTrayStatus(repo, settings);
 
-    expect(ctxStub.fillText).not.toHaveBeenCalled();
-    // 1 次底色圆角方块 + 3 根柱条
-    expect(ctxStub.roundRect).toHaveBeenCalledTimes(4);
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(ctxStub.fillText).toHaveBeenCalledWith('ZK', 16, 17);
   });
 
   it('网页版（无 __TAURI__）为空操作', () => {

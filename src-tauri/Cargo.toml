@@ -1,6 +1,6 @@
 [package]
 name = "model-quota-app"
-version = "0.6.4"
+version = "0.6.5"
 description = "桌看 - Live2D 桌宠看板娘：AI 对话 · 文件分析 · 额度查询"
 authors = ["model-quota"]
 edition = "2021"

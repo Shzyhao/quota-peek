@@ -1,11 +1,11 @@
 import { collectAlerts, STATUS_LABELS } from '../core/status.js';
 
-// 托盘动态图标：按当前全局健康度在前端绘制 32×32 RGBA（底色=严重度、白字=最高用量%），
-// 连同摘要 tooltip 经 update_tray_status 命令交给 Rust 更新托盘；网页版（无 __TAURI__）为空操作。
+// 托盘/任务栏动态图标：底色按全局健康度变化（绿=正常 / 琥珀=提醒 / 红=异常 / 灰=无数据），
+// 白字 ZK 为品牌标识（桌看 · ZhuoKan）。32×32 RGBA 经 update_tray_status 交给 Rust 同步
+// 更新托盘与主窗大图标；网页版（无 __TAURI__）为空操作。
 // 纯函数 computeTrayStatus 单测覆盖，drawIcon 依赖 Canvas 仅桌面壳真实环境使用。
 
 const SIZE = 32;
-// 严重度配色：绿=全部正常 / 琥珀=有提醒 / 红=有异常 / 灰=暂无数据
 const LEVEL_COLORS = {
   ok: [34, 197, 94],
   warn: [245, 158, 11],
@@ -13,8 +13,7 @@ const LEVEL_COLORS = {
   idle: [148, 163, 184],
 };
 
-// 计算托盘状态：level 决定底色；badge 取已查询供应商的最高用量%（5h/周取大者，无数据显示纯色块）；
-// tooltip 为多行摘要（Windows 上限 128 字符，截断）
+// 计算托盘状态：level 决定底色；tooltip 为多行摘要（Windows 上限 128 字符，截断）
 export function computeTrayStatus(providers, settings) {
   const enabled = (providers || []).filter((p) => p.enabled !== false);
   const alerts = collectAlerts(enabled, settings);
@@ -24,29 +23,17 @@ export function computeTrayStatus(providers, settings) {
   else if (alerts.some((a) => a.level === 'error')) level = 'error';
   else if (alerts.length) level = 'warn';
 
-  let badge = null;
-  for (const p of enabled) {
-    const usage = p.lastQuery?.status === 'ok' ? p.lastQuery.usage : null;
-    if (!usage) continue;
-    for (const v of [usage.windowUsedPercent, usage.weeklyUsedPercent]) {
-      if (typeof v === 'number' && Number.isFinite(v)) {
-        badge = Math.max(badge ?? 0, Math.round(v));
-      }
-    }
-  }
-  if (badge != null) badge = Math.min(999, badge);
-
   const lines = alerts.length
     ? [
         `桌看 · ${alerts.length} 项需关注`,
         ...alerts.slice(0, 2).map((a) => `· ${a.name}【${STATUS_LABELS[a.level]}】${a.reasons[0] || ''}`),
       ]
     : ['桌看 · 额度全部正常'];
-  return { level, badge, tooltip: lines.join('\n').slice(0, 127) };
+  return { level, tooltip: lines.join('\n').slice(0, 127) };
 }
 
-// 圆角方块底 + 居中数字（按位数降字号），返回 RGBA 像素数组；Canvas 不可用返回 null
-function drawIcon({ level, badge }) {
+// 圆角方块底（严重度色）+ 居中白字 ZK，返回 RGBA 像素数组；Canvas 不可用返回 null
+function drawIcon({ level }) {
   const canvas = document.createElement('canvas');
   canvas.width = SIZE;
   canvas.height = SIZE;
@@ -60,23 +47,11 @@ function drawIcon({ level, badge }) {
   ctx.fillStyle = `rgb(${r},${g},${b})`;
   ctx.fill();
 
-  if (badge != null) {
-    const text = String(badge);
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = `bold ${text.length >= 3 ? 13 : text.length === 2 ? 16 : 19}px 'Segoe UI', sans-serif`;
-    ctx.fillText(text, SIZE / 2, SIZE / 2 + 1);
-  } else {
-    // 无用量数据（纯余额型供应商）：画白色三柱条（与应用图标同款 motif），避免纯色块
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-    const baseY = SIZE - 7;
-    [{ h: 8, x: 7 }, { h: 13, x: 14 }, { h: 18, x: 21 }].forEach(({ h, x }) => {
-      ctx.beginPath();
-      ctx.roundRect(x, baseY - h, 4.5, h, 2);
-      ctx.fill();
-    });
-  }
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = "bold 15px 'Segoe UI', sans-serif";
+  ctx.fillText('ZK', SIZE / 2, SIZE / 2 + 1);
   return ctx.getImageData(0, 0, SIZE, SIZE).data;
 }
 
