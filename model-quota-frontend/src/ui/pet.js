@@ -439,7 +439,29 @@ export async function renderPet({ root, repo }) {
     if (!getActiveCustom()) model.motion(MODEL.idle, undefined, 3);
   } catch (err) {
     console.error('[pet] Live2D 初始化失败', err);
-    // 渲染失败不拦对话：输入条仍可用（stage 保留，错误占位不覆盖输入条）
+    // 激活的自定义形象不可用（文件被移走/损坏/asset 404）→ 自动禁用并回退内置
+    // 22 娘重试一次；内置也失败才进入错误占位（对话功能始终不受影响）
+    if (getActiveCustom()) {
+      console.warn('[pet] 自定义形象不可用，回退内置形象');
+      clearActiveCustom();
+      try {
+        await loadRuntimeScript('cubism2');
+        const [pixi, l2d2] = await Promise.all([
+          import('pixi.js'),
+          import('pixi-live2d-display/cubism2'),
+        ]);
+        window.PIXI = pixi;
+        Live2DModelClass = l2d2.Live2DModel;
+        loadedRuntime = 'cubism2';
+        const model = await buildModel();
+        modelRef = model;
+        model.motion(MODEL.idle, undefined, 3);
+        showBubble('自定义形象加载失败，已恢复 22 娘');
+        return;
+      } catch (fallbackErr) {
+        console.error('[pet] 内置形象回退也失败', fallbackErr);
+      }
+    }
     const errEl = document.createElement('div');
     errEl.className = 'pet-error';
     errEl.textContent = 'Live2D 渲染不可用，对话功能不受影响';
