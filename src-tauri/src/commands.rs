@@ -406,6 +406,97 @@ pub fn analyze_delete_history(app: AppHandle, id: String) -> Result<(), String> 
     liteai_config::delete_history_entry(&dir, &id)
 }
 
+// ——— 自定义 Live2D 形象导入 ———
+
+/// 递归复制目录（Live2D 模型是多文件结构：moc + 贴图 + 动作）
+fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let ty = entry.file_type().map_err(|e| e.to_string())?;
+        let target = dest.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// 在模型目录中查找入口文件：优先 *.model3.json（Cubism 4），其次 model.json（Cubism 2）。
+/// 限制 3 层深度，避免误扫贴图子目录。
+fn find_model_entry(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut stack = vec![(dir.to_path_buf(), 0)];
+    let mut model3: Option<PathBuf> = None;
+    let mut model2: Option<PathBuf> = None;
+    while let Some((d, depth)) = stack.pop() {
+        if depth > 3 {
+            continue;
+        }
+        let entries = std::fs::read_dir(&d).ok()?;
+        for entry in entries.flatten() {
+            let ty = entry.file_type().ok()?;
+            let path = entry.path();
+            if ty.is_dir() {
+                stack.push((path, depth + 1));
+            } else {
+                let name = path.file_name()?.to_string_lossy().to_lowercase();
+                if model3.is_none() && name.ends_with("model3.json") {
+                    model3 = Some(path.clone());
+                } else if model2.is_none() && name == "model.json" {
+                    model2 = Some(path);
+                }
+            }
+        }
+    }
+    model3.or(model2).map(|p| p.strip_prefix(dir).unwrap_or(&p).to_path_buf())
+}
+
+/// 导入用户自选的 Live2D 模型文件夹：复制到 app_config_dir/pet-models/<名>/，
+/// 返回 { name, abs_path, runtime }（前端经 asset 协议加载 abs_path）。
+#[tauri::command]
+pub fn pet_import_model(app: AppHandle, src: String) -> Result<serde_json::Value, String> {
+    let src_path = PathBuf::from(&src);
+    if !src_path.exists() {
+        return Err("所选路径不存在".into());
+    }
+    // 允许直接选模型入口文件或其所在目录
+    let dir = if src_path.is_file() {
+        src_path.parent().ok_or("无效路径")?.to_path_buf()
+    } else {
+        src_path
+    };
+    let dir_name = dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .ok_or("无效目录名")?;
+    let base = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("pet-models");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let mut dest = base.join(&dir_name);
+    let mut n = 1;
+    while dest.exists() {
+        n += 1;
+        dest = base.join(format!("{}-{}", dir_name, n));
+    }
+    copy_dir_recursive(&dir, &dest)?;
+    let entry = find_model_entry(&dest).ok_or("所选目录中未找到 model3.json 或 model.json 入口文件")?;
+    let runtime = if entry.to_string_lossy().to_lowercase().ends_with("model3.json") {
+        "cubism4"
+    } else {
+        "cubism2"
+    };
+    Ok(serde_json::json!({
+        "name": dest.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| dir_name.clone()),
+        "abs_path": dest.join(entry).to_string_lossy(),
+        "runtime": runtime,
+    }))
+}
+
 #[tauri::command]
 pub fn analyze_clear_history(app: AppHandle) -> Result<(), String> {
     let dir = app.path().app_config_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

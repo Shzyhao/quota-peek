@@ -10,6 +10,7 @@ import {
 import { maskApiKey } from '../core/mask.js';
 import { THEME_LABELS, getStoredTheme } from '../core/theme.js';
 import { escapeHtml, formatMoney, formatNumber, formatDateTime } from './format.js';
+import { petAppearanceCard } from './petSettings.js';
 
 const LOG_STATUS_LABELS = { ok: '成功', failed: '失败', unsupported: '不支持' };
 
@@ -376,6 +377,7 @@ export function settingsView(ctx) {
         <label class="setting-toggle"><input data-ball-toggle type="checkbox" ${ballVisible ? 'checked' : ''}>启用桌面悬浮 —— 桌宠形态：置顶 Live2D 人物（点击弹功能菜单 / 拖动移动位置 / 👗 换装）；经典悬浮球：置顶圆形小窗（蓝=正常 / 琥珀=低值提醒 / 红=异常），单击展开速览；也可从顶栏或托盘菜单开关</label>` : ''}
       </section>
 
+      ${isDesktop ? petAppearanceCard() : ""}
       <section class="settings-card">
         <h3>数据备份</h3>
         <p class="settings-hint">所有数据保存在本浏览器 localStorage。可导出 JSON 备份，或从备份文件恢复。<br>⚠ 备份文件包含 API Key 明文，请妥善保管，不要分享给他人。</p>

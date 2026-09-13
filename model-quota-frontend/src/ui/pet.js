@@ -14,93 +14,26 @@ import {
 } from '../core/chat.js';
 import { analyzeFiles } from '../core/analysis.js';
 import { escapeHtml } from './format.js';
+import {
+  SKINS, currentSkin, modelUrlFor, activeModelUrl, activeRuntime,
+  getActiveCustom, setActiveCustom, clearActiveCustom, listCustomModels,
+  loadRuntimeScript,
+} from './live2d.js';
 
-/// 桌宠形象配置：换模型/换皮肤只改这里。
-/// runtime 决定运行时脚本与库入口；motions 为模型动作组（互动随机播）。
-const PET_MODELS = {
-  // bilibili 22 娘（Cubism 2.1，Q 版，社区开源 GPL；20 套皮肤见 SKINS）
-  mascot22: {
-    runtime: 'cubism2',
-    idle: 'idle',
-    motions: ['tap_body', 'thanking'],
-  },
-  // Haru（Live2D 官方示例，Cubism 4，全身写实比例）——备选
-  haru: {
-    runtime: 'cubism4',
-    url: '/assets/live2d/haru/haru_greeter_t03.model3.json',
-    idle: 'Idle',
-    motions: ['Tap'],
-  },
-};
-const MODEL = PET_MODELS.mascot22;
-
-/// 22 娘皮肤清单（贴图在 skins/<id>/，moc/动作共享 22/ 根；0default 即根目录模型）
-const SKINS = [
-  { id: '0default', label: '默认' },
-  { id: 'bls', label: 'BLS' },
-  { id: 'bls-summer', label: 'BLS·夏' },
-  { id: 'bls-winer', label: 'BLS·冬' },
-  { id: 'cba-normal', label: 'CBA' },
-  { id: 'cba-super', label: 'CBA·炫' },
-  { id: 'deluxe', label: '豪华' },
-  { id: 'lover', label: '恋人' },
-  { id: 'newyear', label: '新年' },
-  { id: 'playwater', label: '玩水' },
-  { id: 'school', label: '学院' },
-  { id: 'spring', label: '春日' },
-  { id: 'summer', label: '夏日' },
-  { id: 'summer-normal', label: '夏日·常' },
-  { id: 'summer-super', label: '夏日·炫' },
-  { id: 'tomo-bukatsu-high', label: '社团·高' },
-  { id: 'tomo-bukatsu-low', label: '社团·低' },
-  { id: 'vadys', label: '情人节' },
-  { id: 'valley', label: '田园' },
-  { id: 'xmas', label: '圣诞' },
-];
-const SKIN_KEY = 'mqc.pet.skin';
-
-const modelUrlFor = (skin) => (skin === '0default'
-  ? '/assets/live2d/22/model.json'
-  : `/assets/live2d/22/skins/${skin}/model.json`);
-
-const currentSkin = () => {
-  const s = localStorage.getItem(SKIN_KEY);
-  return SKINS.some((x) => x.id === s) ? s : '0default';
-};
-
-const RUNTIME_SCRIPTS = {
-  cubism2: '/assets/lib/live2d.min.js',        // 提供 window.Live2D
-  cubism4: '/assets/lib/live2dcubismcore.min.js', // 提供 window.Live2DCubismCore
-};
-const RUNTIME_GLOBALS = {
-  cubism2: 'Live2D',
-  cubism4: 'Live2DCubismCore',
+/// 桌宠内置形象：bilibili 22 娘（Cubism 2.1，Q 版，社区开源 GPL；20 套皮肤）。
+/// 自定义形象（用户导入）的状态与运行时加载在 ui/live2d.js。
+const MODEL = {
+  runtime: 'cubism2',
+  idle: 'idle',
+  motions: ['tap_body', 'thanking'],
 };
 
 /// 输入条高度（人物底部锚点上移量，避免人物被输入条挡住）
 const INPUT_BAR_H = 44;
-/// 人物占窗口可用高度的比例：模型贴边撑满显得过大，留出呼吸空间
+/// 人物内容占窗口可用高度的比例
 const PET_SCALE = 0.72;
 /// 气泡在回复完成后停留的时长
 const BUBBLE_LINGER_MS = 8000;
-
-// 单例加载指定 runtime 脚本（注入全局对象）
-function loadRuntimeScript(runtime) {
-  const src = RUNTIME_SCRIPTS[runtime];
-  const g = RUNTIME_GLOBALS[runtime];
-  if (!loadRuntimeScript.cache) loadRuntimeScript.cache = {};
-  if (!loadRuntimeScript.cache[runtime]) {
-    loadRuntimeScript.cache[runtime] = new Promise((resolve, reject) => {
-      if (globalThis[g]) return resolve();
-      const s = document.createElement('script');
-      s.src = src;
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error(`Live2D 运行时加载失败：${src}`));
-      document.head.appendChild(s);
-    });
-  }
-  return loadRuntimeScript.cache[runtime];
-}
 
 const emitTauri = (event, payload) => globalThis.__TAURI__?.event?.emit?.(event, payload);
 
@@ -208,9 +141,19 @@ export async function renderPet({ root, repo }) {
       const cur = currentSkin();
       menu.innerHTML = `
         <div class="pet-menu-head"><button data-menu="back">‹ 返回</button><b>换装</b><span></span></div>
-        <div class="pet-skin-grid">
-          ${SKINS.map((s) => `<button data-skin="${s.id}" class="${s.id === cur ? 'cur' : ''}">${s.label}</button>`).join('')}
-        </div>`;
+        ${(() => {
+          const customs = listCustomModels();
+          const activeCustom = getActiveCustom();
+          return `
+            ${customs.length ? `<div class="pet-skin-section">我的形象</div>
+            <div class="pet-skin-grid">
+              ${customs.map((c) => `<button data-custom="${escapeHtml(c.id)}" class="${activeCustom?.id === c.id ? 'cur' : ''}">${escapeHtml(c.name)}</button>`).join('')}
+            </div>` : ''}
+            <div class="pet-skin-section">内置皮肤 · 22 娘</div>
+            <div class="pet-skin-grid">
+              ${SKINS.map((s) => `<button data-skin="${s.id}" class="${!activeCustom && s.id === cur ? 'cur' : ''}">${s.label}</button>`).join('')}
+            </div>`;
+        })()}`;
     } else {
       menu.innerHTML = `
         <div class="pet-menu-head"><b>桌看 · 功能</b><span></span></div>
@@ -235,6 +178,12 @@ export async function renderPet({ root, repo }) {
     // 菜单内点击到此为止：showMenu 会重渲染 innerHTML，让冒泡中的 e.target
     // 变成游离节点——root 的 closest('.pet-menu') 保护会失效，必须阻断冒泡
     e.stopPropagation();
+    const customBtn = e.target.closest('[data-custom]');
+    if (customBtn) {
+      const entry = listCustomModels().find((x) => x.id === customBtn.dataset.custom);
+      if (entry) void applyCustom(entry);
+      return;
+    }
     const skinBtn = e.target.closest('[data-skin]');
     if (skinBtn) {
       void applySkin(skinBtn.dataset.skin);
@@ -255,8 +204,13 @@ export async function renderPet({ root, repo }) {
     else hideMenu();
   });
 
-  // 菜单「换装」= 循环切换到下一套皮肤（皮肤全列表用输入条 👗 打开）
+  // 菜单「换装」= 循环切换：自定义形象在用时先切回内置，否则切到下一套内置皮肤
+  // （完整形象选择——含我的形象与全部皮肤——用输入条 👗 打开）
   function cycleSkin() {
+    if (getActiveCustom()) {
+      void applySkin(currentSkin());
+      return;
+    }
     const idx = SKINS.findIndex((s) => s.id === currentSkin());
     const next = SKINS[(idx + 1) % SKINS.length];
     void applySkin(next.id);
@@ -268,6 +222,7 @@ export async function renderPet({ root, repo }) {
     if (skinLoading) return;
     skinLoading = true;
     try {
+      clearActiveCustom();
       localStorage.setItem(SKIN_KEY, id);
       hideMenu();
       const label = SKINS.find((s) => s.id === id)?.label || id;
@@ -275,6 +230,26 @@ export async function renderPet({ root, repo }) {
       await reloadModel();
       showBubble(`已换上「${label}」✨`);
       playPetMotion();
+    } finally {
+      skinLoading = false;
+    }
+  }
+
+  // 应用自定义形象：写入激活状态并热重载；运行时不同时整窗重载
+  async function applyCustom(entry) {
+    if (skinLoading) return;
+    skinLoading = true;
+    try {
+      hideMenu();
+      showBubble(`正在换上「${entry.name}」…`, { autoHide: false });
+      setActiveCustom(entry);
+      if (activeRuntime() !== loadedRuntime) {
+        // Cubism 2 ↔ 4 运行时切换：热重载跨不过库边界，整窗刷新
+        location.reload();
+        return;
+      }
+      await reloadModel();
+      showBubble(`已换上「${entry.name}」✨`);
     } finally {
       skinLoading = false;
     }
@@ -362,9 +337,12 @@ export async function renderPet({ root, repo }) {
   let modelRef = null;
   let app;
   let Live2DModelClass = null; // 库类引用（动态 import 取得，供换装热重载）
+  let loadedRuntime = null;
 
-  // 随机播一个互动动作（说话、点击、分析完成等场景共用；模型加载前调用为空操作）
+  // 随机播一个互动动作（说话、点击、分析完成等场景共用；模型加载前调用为空操作；
+  // 自定义模型动作组未知，跳过互动动作——idle 由库按模型配置自动循环）
   const playPetMotion = () => {
+    if (getActiveCustom()) return;
     const group = MODEL.motions[Math.floor(Math.random() * MODEL.motions.length)];
     modelRef?.motion(group, undefined, 3);
   };
@@ -373,7 +351,7 @@ export async function renderPet({ root, repo }) {
   // 缩放会导致视觉尺寸失真+悬空）——先粗放，测 bounds，再缩放到目标高度并
   // 平移到水平居中、内容底部贴输入条上方
   async function buildModel() {
-    const model = await Live2DModelClass.from(modelUrlFor(currentSkin()));
+    const model = await Live2DModelClass.from(activeModelUrl());
     const availH = stage.clientHeight - INPUT_BAR_H;
     const cx = stage.clientWidth / 2;
     model.anchor.set(0.5, 1);
@@ -416,7 +394,7 @@ export async function renderPet({ root, repo }) {
       }
       app.stage.addChild(model);
       modelRef = model;
-      model.motion(MODEL.idle, undefined, 3);
+      if (!getActiveCustom()) model.motion(MODEL.idle, undefined, 3);
     } catch (err) {
       console.error('[pet] 换装失败', err);
       showBubble(`换装失败：${escapeHtml(String(err?.message || err))}`);
@@ -428,10 +406,12 @@ export async function renderPet({ root, repo }) {
   }
 
   try {
-    await loadRuntimeScript(MODEL.runtime);
+    const runtime = activeRuntime();
+    loadedRuntime = runtime;
+    await loadRuntimeScript(runtime);
     const [pixi, l2d] = await Promise.all([
       import('pixi.js'),
-      MODEL.runtime === 'cubism2'
+      runtime === 'cubism2'
         ? import('pixi-live2d-display/cubism2')
         : import('pixi-live2d-display/cubism4'),
     ]);
@@ -455,8 +435,8 @@ export async function renderPet({ root, repo }) {
     const model = await buildModel();
     modelRef = model;
 
-    // 开场播一段 idle，随后由 MotionManager 自动循环空闲动作
-    model.motion(MODEL.idle, undefined, 3);
+    // 开场播一段 idle（自定义模型的 idle 由库按其配置自动循环）
+    if (!getActiveCustom()) model.motion(MODEL.idle, undefined, 3);
   } catch (err) {
     console.error('[pet] Live2D 初始化失败', err);
     // 渲染失败不拦对话：输入条仍可用（stage 保留，错误占位不覆盖输入条）
@@ -465,6 +445,16 @@ export async function renderPet({ root, repo }) {
     errEl.textContent = 'Live2D 渲染不可用，对话功能不受影响';
     stage.appendChild(errEl);
   }
+
+  // 设置页修改形象（皮肤/自定义）跨窗同步：运行时一致时热重载，否则整窗刷新
+  globalThis.addEventListener?.('storage', (e) => {
+    if (!e.key || !e.key.startsWith('mqc.pet.')) return;
+    if (activeRuntime() !== loadedRuntime) {
+      location.reload();
+      return;
+    }
+    void reloadModel();
+  });
 
   return {
     app,

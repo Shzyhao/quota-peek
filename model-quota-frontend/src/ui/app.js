@@ -8,6 +8,7 @@ import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
 import { chatView, mountChatPage } from './chatView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
+import { mountPetAppearanceCard } from './petSettings.js';
 
 const NAV_ITEMS = [
   { view: 'home', label: '首页', icon: 'M4 11l8-7 8 7M6 10v9h12v-9' },
@@ -300,6 +301,8 @@ export function renderApp({ root, repo, logger, service }) {
     } else if (view === 'analysis') {
       const analysisRoot = content.querySelector('[data-role="analysis-root"]');
       if (analysisRoot) mountAnalysisPage(analysisRoot);
+    } else if (view === 'settings') {
+      mountPetAppearanceCard(content);
     }
     const navItems = root.querySelectorAll('[data-action="nav"]');
     navItems.forEach((el) => el.classList.toggle('active', el.dataset.view === view));

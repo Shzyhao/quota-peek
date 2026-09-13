@@ -23,8 +23,8 @@ const MINI_H: f64 = 430.0;
 /// 经典悬浮球窗口尺寸（球体 60px + 辉光余量，前端 .ball 呈现圆形）
 const BALL_SIZE: f64 = 76.0;
 /// 桌宠窗口逻辑尺寸（Q 版半身形象，紧凑小窗）
-const PET_W: f64 = 240.0;
-const PET_H: f64 = 300.0;
+const PET_W: f64 = 180.0;
+const PET_H: f64 = 220.0;
 
 fn default_form() -> String {
     "pet".into()
@@ -408,7 +408,8 @@ pub fn run() {
             commands::analyze_cancel,
             commands::analyze_get_history,
             commands::analyze_delete_history,
-            commands::analyze_clear_history
+            commands::analyze_clear_history,
+            commands::pet_import_model
         ])
         .setup(|app| {
             let prefs = load_prefs(app.app_handle());

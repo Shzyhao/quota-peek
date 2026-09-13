@@ -2448,3 +2448,73 @@ html.ball-mode body {
 ::selection {
   background: color-mix(in srgb, var(--primary) 24%, transparent);
 }
+
+/* 换装网格分区标题（内置皮肤 / 我的形象） */
+.pet-skin-section {
+  font-size: 11px;
+  color: rgba(241, 245, 251, 0.55);
+  padding: 3px 4px 1px;
+  letter-spacing: 0.08em;
+}
+
+/* ============ 设置页 · 桌宠形象卡 ============ */
+.pet-appearance {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.pet-preview {
+  flex: none;
+  width: 170px;
+  height: 210px;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(140px 90px at 50% 100%, var(--primary-soft), transparent 70%),
+    var(--surface-2);
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.pet-preview-hint {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  line-height: 1.8;
+  grid-area: 1 / 1;
+}
+
+.pet-preview canvas { grid-area: 1 / 1; }
+
+.pet-appearance-info {
+  flex: 1;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pet-current { margin: 0; color: var(--text-2); font-size: 13.5px; }
+.pet-current b { color: var(--text); }
+
+.pet-skin-label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.pet-appearance-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* 禁用态控件（如自定义形象激活时的内置皮肤下拉） */
+select:disabled,
+input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--bg-soft);
+}
