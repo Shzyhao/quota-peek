@@ -2473,19 +2473,21 @@ input:disabled {
   background: var(--bg-soft);
 }
 
-/* 功能菜单右上角关闭按钮（浮于首行按钮右端空白处） */
+/* 功能菜单右上角关闭按钮：与首行按钮垂直居中（菜单 padding 8px + (行高33.6-22)/2 ≈ 14px） */
 .pet-menu-close {
   position: absolute !important;
-  top: 4px;
+  top: 14px;
   right: 4px;
   width: 22px;
   height: 22px;
   min-height: 0 !important;
   padding: 0 !important;
   border-radius: 50%;
-  font-size: 14px;
-  line-height: 1;
-  text-align: center;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 15px !important;
+  line-height: 1 !important;
   color: rgba(241, 245, 251, 0.7) !important;
   background: transparent !important;
 }
