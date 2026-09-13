@@ -1,18 +1,14 @@
 // 桌宠视图（#pet）：Live2D 人物悬浮窗，取代经典悬浮球形态。
 // 交互约定与悬浮球一致：拖动（>6px 位移）= 原生窗口拖动；原地单击 = 弹出/收起
-// 功能气泡菜单（对话 / 文件分析 / 额度速览 / 换装），菜单项打开锚定桌宠旁的
-// 功能弹窗（pet-panel 事件由桌面壳建窗）。底部常驻输入条可直接对话（流式气泡）。
+// 功能气泡菜单（对话 / 文件分析 / 额度速览 / 换装 + 形象列表内联），菜单项打开
+// 锚定桌宠旁的功能弹窗（pet-panel 事件由桌面壳建窗）。
 //
 // 依赖加载顺序是硬约束：pixi-live2d-display 的 cubism2/cubism4 入口在模块求值时
 // 就检查各自运行时全局对象（window.Live2D / window.Live2DCubismCore），缺失即抛错
 // ——因此运行时脚本（版权原因不入 npm，作为静态资源）必须先于库加载，pixi 系模块
 // 全部走动态 import（也让 main/mini/ball 窗口不必背上 pixi 的体积）。
 
-import {
-  loadHistory, saveHistory, buildQuotaContext, buildOutgoingMessages,
-  isChatAvailable, sendChat, cancelChat,
-} from '../core/chat.js';
-import { analyzeFiles } from '../core/analysis.js';
+import { analyzeFiles, isAnalysisAvailable } from '../core/analysis.js';
 import { escapeHtml } from './format.js';
 import {
   SKINS, SKIN_KEY, currentSkin, modelUrlFor, activeModelUrl, activeRuntime,
@@ -28,8 +24,6 @@ const MODEL = {
   motions: ['tap_body', 'thanking'],
 };
 
-/// 输入条高度（人物底部锚点上移量，避免人物被输入条挡住）
-const INPUT_BAR_H = 44;
 /// 人物内容占窗口可用高度的比例
 const PET_SCALE = 0.72;
 /// 气泡在回复完成后停留的时长
@@ -37,19 +31,12 @@ const BUBBLE_LINGER_MS = 8000;
 
 const emitTauri = (event, payload) => globalThis.__TAURI__?.event?.emit?.(event, payload);
 
-export async function renderPet({ root, repo }) {
+export async function renderPet({ root }) {
   document.documentElement.classList.add('pet-mode');
   root.innerHTML = `
     <div class="pet-stage">
       <div class="pet-menu" hidden></div>
       <div class="pet-bubble" hidden></div>
-      <div class="pet-input-bar">
-        <input data-role="pet-input" placeholder="和桌宠聊聊…" maxlength="2000">
-        <button data-role="pet-skin" title="换装" aria-label="换装">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M9.2 3h5.6l-.9 4.6 4.3 10.2a1 1 0 0 1-.92 1.4H6.72a1 1 0 0 1-.92-1.4l4.3-10.2L9.2 3z"/><path d="M9.2 3c.9 1.2 2 1.8 2.8 1.8S13.9 4.2 14.8 3"/></svg>
-        </button>
-        <button data-role="pet-send" title="发送" aria-label="发送">➤</button>
-      </div>
     </div>`;
   const stage = root.querySelector('.pet-stage');
   const bubble = root.querySelector('.pet-bubble');
@@ -75,97 +62,32 @@ export async function renderPet({ root, repo }) {
     bubble.hidden = true;
   }
 
-  async function petSend(text) {
-    if (streaming || !text.trim()) return;
-    if (!isChatAvailable()) {
-      showBubble('对话功能需要桌面版');
-      return;
-    }
-    streaming = true;
-    showBubble('<span class="pet-typing">…</span>', { autoHide: false });
-
-    const messages = loadHistory();
-    messages.push({ role: 'user', content: text, time: Date.now() });
-    const quotaCtx = repo ? buildQuotaContext(repo.listProviders()) : null;
-    const outgoing = buildOutgoingMessages(messages.slice(0, -1), quotaCtx);
-    outgoing.push({ role: 'user', content: text });
-
-    let reply = '';
-    await sendChat(outgoing, {
-      onToken: (t) => {
-        reply += t;
-        showBubble(escapeHtml(reply), { autoHide: false });
-      },
-      onDone: () => {
-        messages.push({ role: 'assistant', content: reply, time: Date.now() });
-        saveHistory(messages);
-        finish(reply || '（空回复）');
-      },
-      onError: (msg) => {
-        messages.push({ role: 'assistant', content: reply, error: true, time: Date.now() });
-        saveHistory(messages);
-        finish(reply || `（失败：${msg}）`);
-      },
-      onCancelled: () => finish(reply || '（已停止）'),
-    });
-
-    function finish(text) {
-      streaming = false;
-      showBubble(escapeHtml(text));
-      // 说话时来个小动作
-      playPetMotion();
-    }
-  }
-
-  root.querySelector('[data-role="pet-send"]').addEventListener('click', () => {
-    const input = root.querySelector('[data-role="pet-input"]');
-    const text = input.value.trim();
-    if (text) { input.value = ''; void petSend(text); }
-  });
-  root.querySelector('[data-role="pet-input"]').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      const input = e.target;
-      const text = input.value.trim();
-      if (text && !streaming) { input.value = ''; void petSend(text); }
-    }
-  });
-  root.querySelector('[data-role="pet-input"]').addEventListener('focus', hideMenu);
   // 气泡上点击 = 关闭
   bubble.addEventListener('click', hideBubble);
 
-  // ——— 功能气泡菜单（点击桌宠弹出；菜单项打开锚定桌宠的功能弹窗） ———
+  // ——— 功能气泡菜单（点击桌宠弹出）：功能区 + 形象列表单视图自适应展示 ———
 
-  function renderMenu(view) {
-    if (view === 'skins') {
-      const cur = currentSkin();
-      menu.innerHTML = `
-        <div class="pet-menu-head"><button data-menu="back">‹ 返回</button><b>换装</b><span></span></div>
-        ${(() => {
-          const customs = listCustomModels();
-          const activeCustom = getActiveCustom();
-          return `
-            ${customs.length ? `<div class="pet-skin-section">我的形象</div>
-            <div class="pet-skin-grid">
-              ${customs.map((c) => `<button data-custom="${escapeHtml(c.id)}" class="${activeCustom?.id === c.id ? 'cur' : ''}">${escapeHtml(c.name)}</button>`).join('')}
-            </div>` : ''}
-            <div class="pet-skin-section">内置皮肤 · 22 娘</div>
-            <div class="pet-skin-grid">
-              ${SKINS.map((s) => `<button data-skin="${s.id}" class="${!activeCustom && s.id === cur ? 'cur' : ''}">${s.label}</button>`).join('')}
-            </div>`;
-        })()}`;
-    } else {
-      menu.innerHTML = `
-        <div class="pet-menu-head"><b>桌看 · 功能</b><span></span></div>
-        <button data-menu="chat">💬 对话</button>
-        <button data-menu="analysis">📄 文件分析</button>
-        <button data-menu="quota">📊 额度速览</button>
-        <button data-menu="skins">👗 换装（切换到下一套）</button>`;
-    }
+  function renderMenu() {
+    const cur = currentSkin();
+    const customs = listCustomModels();
+    const activeCustom = getActiveCustom();
+    menu.innerHTML = `
+      <button data-menu="chat">💬 对话</button>
+      <button data-menu="analysis">📄 文件分析</button>
+      <button data-menu="quota">📊 额度速览</button>
+      <button data-menu="skins">👗 换装（下一套）</button>
+      ${customs.length ? `<div class="pet-skin-section">我的形象</div>
+      <div class="pet-skin-grid">
+        ${customs.map((c) => `<button data-custom="${escapeHtml(c.id)}" class="${activeCustom?.id === c.id ? 'cur' : ''}">${escapeHtml(c.name)}</button>`).join('')}
+      </div>` : ''}
+      <div class="pet-skin-section">内置皮肤 · 22 娘</div>
+      <div class="pet-skin-grid">
+        ${SKINS.map((s) => `<button data-skin="${s.id}" class="${!activeCustom && s.id === cur ? 'cur' : ''}">${s.label}</button>`).join('')}
+      </div>`;
   }
 
-  function showMenu(view = 'actions') {
-    renderMenu(view);
+  function showMenu() {
+    renderMenu();
     hideBubble();
     menu.hidden = false;
   }
@@ -192,20 +114,13 @@ export async function renderPet({ root, repo }) {
     const act = e.target.closest('[data-menu]')?.dataset.menu;
     if (!act) return;
     if (act === 'skins') cycleSkin();
-    else if (act === 'back') showMenu('actions');
     else if (act === 'chat') { hideMenu(); emitTauri('pet-panel', 'chat'); playPetMotion(); }
     else if (act === 'analysis') { hideMenu(); emitTauri('pet-panel', 'analysis'); }
     else if (act === 'quota') { hideMenu(); emitTauri('ball-clicked'); }
   });
 
-  // 输入条上的换装按钮：任何状态都切到换装视图（菜单开着也切过去），已在换装视图才收起
-  root.querySelector('[data-role="pet-skin"]').addEventListener('click', () => {
-    if (menu.hidden || !menu.querySelector('.pet-skin-grid')) showMenu('skins');
-    else hideMenu();
-  });
-
   // 菜单「换装」= 循环切换：自定义形象在用时先切回内置，否则切到下一套内置皮肤
-  // （完整形象选择——含我的形象与全部皮肤——用输入条 👗 打开）
+  // （完整形象列表在菜单下方内联展示；导入新形象在设置页）
   function cycleSkin() {
     if (getActiveCustom()) {
       void applySkin(currentSkin());
@@ -265,7 +180,7 @@ export async function renderPet({ root, repo }) {
     void petWebview.onDragDropEvent(async (ev) => {
       const p = ev?.payload;
       if (p?.type !== 'drop' || !p.paths?.length || streaming) return;
-      if (!isChatAvailable()) return;
+      if (!isAnalysisAvailable()) return;
       streaming = true;
       let tail = '';
       showBubble(`开始分析 ${p.paths.length} 个文件…`, { autoHide: false });
@@ -298,8 +213,8 @@ export async function renderPet({ root, repo }) {
   let press = null;
   let dragged = false;
   root.addEventListener('mousedown', (e) => {
-    // 输入条 / 气泡 / 菜单是控件交互区，不进入拖动判定
-    if (e.target.closest('.pet-input-bar, .pet-bubble, .pet-menu')) return;
+    // 气泡 / 菜单是控件交互区，不进入拖动判定
+    if (e.target.closest('.pet-bubble, .pet-menu')) return;
     if (e.button !== 0) return;
     press = { x: e.screenX, y: e.screenY };
     dragged = false;
@@ -322,13 +237,13 @@ export async function renderPet({ root, repo }) {
   // isConnected 兜底：菜单重渲染后冒泡中的旧 target 已游离，closest 保护会失效
   root.addEventListener('click', (e) => {
     if (!e.target.isConnected) return;
-    if (e.target.closest('.pet-input-bar, .pet-bubble, .pet-menu')) return;
+    if (e.target.closest('.pet-bubble, .pet-menu')) return;
     if (dragged) {
       dragged = false;
       return;
     }
     if (menu.hidden) {
-      showMenu('actions');
+      showMenu();
       playPetMotion();
     } else {
       hideMenu();
@@ -365,7 +280,7 @@ export async function renderPet({ root, repo }) {
   // 平移到水平居中、内容底部贴输入条上方
   async function buildModel() {
     const model = await withTimeout(Live2DModelClass.from(activeModelUrl()), 20000, '模型加载');
-    const availH = stage.clientHeight - INPUT_BAR_H;
+    const availH = stage.clientHeight;
     const cx = stage.clientWidth / 2;
     model.anchor.set(0.5, 1);
     model.scale.set(Math.min(stage.clientWidth / model.width, availH / model.height));

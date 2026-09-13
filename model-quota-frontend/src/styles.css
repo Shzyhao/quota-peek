@@ -1875,7 +1875,7 @@ html.pet-mode #app {
 
 .pet-error {
   position: absolute;
-  inset: 0 0 52px;
+  inset: 0 0 12px;
   display: grid;
   place-items: center;
   color: #ff9aa4;
@@ -1890,8 +1890,8 @@ html.pet-mode #app {
   position: absolute;
   left: 8px;
   right: 8px;
-  bottom: 52px;
-  max-height: 46%;
+  bottom: 8px;
+  max-height: 62%;
   overflow-y: auto;
   padding: 10px 12px;
   border-radius: 12px;
@@ -1914,59 +1914,13 @@ html.pet-mode #app {
 
 .pet-typing { opacity: 0.6; letter-spacing: 2px; }
 
-/* 桌宠输入条：底部常驻，紧凑半透明 */
-.pet-input-bar {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  height: 36px;
-  display: flex;
-  gap: 6px;
-  z-index: 2;
-}
-
-.pet-input-bar input {
-  flex: 1;
-  min-width: 0;
-  padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 18px;
-  background: rgba(24, 29, 40, 0.85);
-  color: #f1f5fb;
-  font-size: 13px;
-  outline: none;
-  backdrop-filter: blur(4px);
-}
-
-.pet-input-bar input::placeholder { color: rgba(241, 245, 251, 0.72); }
-
-.pet-input-bar input:focus {
-  border-color: rgba(120, 160, 255, 0.75);
-  background: rgba(30, 36, 48, 0.88);
-}
-
-.pet-input-bar button {
-  flex: none;
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(58, 109, 240, 0.85);
-  color: #fff;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.pet-input-bar button:hover { background: var(--primary-hover); }
-
 /* 桌宠功能气泡菜单：点击桌宠弹出，功能区入口 + 换装皮肤网格 */
 .pet-menu {
   position: absolute;
   left: 8px;
   right: 8px;
-  bottom: 46px;
-  max-height: 72%;
+  bottom: 8px;
+  max-height: 88%;
   overflow-y: auto;
   padding: 8px 8px 10px;
   border-radius: 12px;
