@@ -41,7 +41,7 @@ cd model-quota-frontend
 npm install
 npm run dev        # http://localhost:5180（5173 常被其他项目 dev server 占用，已固定 5180 + strictPort）
 
-# 测试（241 个用例，Vitest + jsdom）
+# 测试（242 个用例，Vitest + jsdom）
 npm test
 
 # 桌面版（项目根目录）
