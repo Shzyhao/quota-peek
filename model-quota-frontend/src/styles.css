@@ -2597,3 +2597,59 @@ input:disabled {
   color: #fff !important;
   background: rgba(255, 255, 255, 0.16) !important;
 }
+
+/* ============ 语音对话（麦克风点按说话 + 回复朗读 + 语音服务配置） ============ */
+
+/* 配置区限高滚动：加了语音服务卡后内容更高，桌宠面板（560 高）里不能把
+   消息区和输入栏完全挤出去 */
+.chat-config {
+  max-height: 62%;
+  overflow-y: auto;
+}
+
+/* 麦克风按钮三态：默认 🎙；录音中红底脉动（按钮字换 ⏹）；识别/朗读中琥珀色忙态 */
+.chat-mic.recording {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: #ef4444;
+  color: #ef4444;
+  animation: chat-mic-pulse 1.2s ease-in-out infinite;
+}
+.chat-mic.busy {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+@keyframes chat-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35); }
+  50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.08); }
+}
+
+/* 语音服务配置卡（复用 chat-config 的表单密度，两列栅格放五项 + Key） */
+.chat-voice-config {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+.chat-voice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+.chat-voice-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-2, #64748b);
+}
+.chat-voice-grid input {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input, #fff);
+  color: inherit;
+}
+.chat-voice-grid label:last-child {
+  grid-column: 1 / -1;
+}

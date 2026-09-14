@@ -1,7 +1,7 @@
 [package]
 name = "model-quota-app"
-version = "0.8.1"
-description = "桌看 - Live2D 桌宠看板娘：AI 对话 · 文件分析 · 额度查询"
+version = "0.9.0"
+description = "桌看 - Live2D 桌宠看板娘：AI 对话（文字/语音）· 文件分析 · 额度查询"
 authors = ["model-quota"]
 edition = "2021"
 
@@ -19,6 +19,8 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 语音对话：录音/合成音频字节的 base64 IPC 编解码
+base64 = "0.22"
 # 轻析（liteai-analyzer）库层：OpenAI 兼容流式客户端 / 配置与密钥 / 文件解析 / 分析管线 / 导出。
 # 五个 crate 均零 tauri 依赖，作为桌宠 AI 对话与文件分析模块的底层复用。
 liteai-model = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
@@ -28,7 +30,8 @@ liteai-parsers = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
 liteai-output = { git = "https://github.com/Shzyhao/liteai-analyzer.git" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Agent 工具循环：OpenAI 兼容 tools 请求 / 本地时间 / 剪贴板
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# multipart：语音识别 voice_transcribe 的音频文件上传（OpenAI 兼容 /audio/transcriptions）
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 arboard = "3"
 

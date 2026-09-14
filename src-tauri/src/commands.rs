@@ -596,6 +596,175 @@ pub fn chat_read_file(path: String) -> Result<serde_json::Value, String> {
     }))
 }
 
+// ——— 语音对话：识别（ASR）与合成（TTS） ———
+// 走 OpenAI 兼容音频端点（默认预置硅基流动）。base_url/model/音色由前端每次传参
+// （存 localStorage，非敏感），Key 存凭据管理器（条目 voice_key），明文不落盘。
+
+const VOICE_KEY_ENTRY: &str = "voice_key";
+const VOICE_TRANSCRIBE_TIMEOUT_SECS: u64 = 30;
+const VOICE_SPEAK_TIMEOUT_SECS: u64 = 60;
+/// 朗读文本限长：CosyVoice 单次合成在数百字内，防误传超长文本烧钱
+const VOICE_SPEAK_MAX_CHARS: usize = 1000;
+
+#[tauri::command]
+pub fn voice_secret_set(state: State<'_, ChatState>, key: String) -> Result<(), String> {
+    state
+        .secrets
+        .set(VOICE_KEY_ENTRY, &key)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn voice_secret_has(state: State<'_, ChatState>) -> Result<bool, String> {
+    state
+        .secrets
+        .get(VOICE_KEY_ENTRY)
+        .map(|k| k.is_some())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn voice_secret_delete(state: State<'_, ChatState>) -> Result<(), String> {
+    state
+        .secrets
+        .delete(VOICE_KEY_ENTRY)
+        .map_err(|e| e.to_string())
+}
+
+fn voice_key(state: &ChatState) -> Result<String, String> {
+    state
+        .secrets
+        .get(VOICE_KEY_ENTRY)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "语音服务未设置 API Key，请在对话页「语音服务」中配置".into())
+}
+
+fn voice_endpoint(base_url: &str, path: &str) -> String {
+    format!("{}/{}", base_url.trim_end_matches('/'), path)
+}
+
+/// 云端错误响应截断（避免整页 HTML/长 JSON 直接抛给前端）
+fn voice_error_body(body: &str) -> String {
+    let t = body.trim();
+    let t = if t.is_empty() { "(空响应)" } else { t };
+    if t.chars().count() > 200 {
+        format!("{}…", t.chars().take(200).collect::<String>())
+    } else {
+        t.to_string()
+    }
+}
+
+fn voice_http_error(what: &str, e: reqwest::Error) -> String {
+    if e.is_timeout() {
+        format!("{what}请求超时，请检查网络或服务可用性")
+    } else if e.is_connect() {
+        format!("{what}连接失败，请检查 base_url 与网络：{e}")
+    } else {
+        format!("{what}请求失败：{e}")
+    }
+}
+
+fn voice_http_client(timeout_secs: u64) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// 语音识别：WAV 字节（base64）→ POST /audio/transcriptions → 文本
+#[tauri::command]
+pub async fn voice_transcribe(
+    state: State<'_, ChatState>,
+    base_url: String,
+    model: String,
+    audio_base64: String,
+) -> Result<String, String> {
+    let key = voice_key(&state)?;
+    use base64::Engine as _;
+    let audio = base64::engine::general_purpose::STANDARD
+        .decode(audio_base64.trim())
+        .map_err(|e| format!("音频数据解码失败：{e}"))?;
+    if audio.is_empty() {
+        return Err("没有收到录音数据".into());
+    }
+    let part = reqwest::multipart::Part::bytes(audio)
+        .file_name("audio.wav")
+        .mime_str("audio/wav")
+        .map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new()
+        .text("model", model)
+        .part("file", part);
+    let client = voice_http_client(VOICE_TRANSCRIBE_TIMEOUT_SECS)?;
+    let resp = client
+        .post(voice_endpoint(&base_url, "audio/transcriptions"))
+        .bearer_auth(&key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| voice_http_error("语音识别", e))?;
+    let status = resp.status();
+    let body = resp.text().await.map_err(|e| format!("读取识别结果失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "语音识别失败（HTTP {}）：{}",
+            status.as_u16(),
+            voice_error_body(&body)
+        ));
+    }
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(str::to_string))
+        .ok_or_else(|| format!("识别结果格式异常：{}", voice_error_body(&body)))
+}
+
+/// 语音合成：文本 → POST /audio/speech → mp3 字节（base64 返回，前端解码播放）
+#[tauri::command]
+pub async fn voice_speak(
+    state: State<'_, ChatState>,
+    base_url: String,
+    model: String,
+    voice: String,
+    text: String,
+) -> Result<String, String> {
+    let key = voice_key(&state)?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("没有可朗读的文本".into());
+    }
+    let input: String = trimmed.chars().take(VOICE_SPEAK_MAX_CHARS).collect();
+    let client = voice_http_client(VOICE_SPEAK_TIMEOUT_SECS)?;
+    let resp = client
+        .post(voice_endpoint(&base_url, "audio/speech"))
+        .bearer_auth(&key)
+        .json(&serde_json::json!({
+            "model": model,
+            "input": input,
+            "voice": voice,
+            "response_format": "mp3",
+        }))
+        .send()
+        .await
+        .map_err(|e| voice_http_error("语音合成", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "语音合成失败（HTTP {}）：{}",
+            status.as_u16(),
+            voice_error_body(&body)
+        ));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取合成音频失败：{e}"))?;
+    if bytes.is_empty() {
+        return Err("语音合成返回了空音频".into());
+    }
+    use base64::Engine as _;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 // ——— 后端定时刷新调度（时钟在 Rust 常驻线程） ———
 // 前端把设置页的刷新间隔同步过来；到点 emit `backend-refresh-due`，由主窗
 // （WebView 常驻，IPC 事件不受隐藏窗口定时器节流影响）执行既有 JS 刷新编排。

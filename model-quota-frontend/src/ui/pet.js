@@ -80,6 +80,7 @@ export async function renderPet({ root, repo }) {
     menu.innerHTML = `
       <button class="pet-menu-close" data-menu="close" aria-label="关闭菜单">×</button>
       <button data-menu="chat">💬 对话</button>
+      <button data-menu="voice">🎙 语音对话</button>
       <button data-menu="analysis">📄 文件分析</button>
       <button data-menu="quota">📊 额度速览</button>
       <button data-menu="skins">👗 换装（下一套）</button>
@@ -119,6 +120,14 @@ export async function renderPet({ root, repo }) {
     if (act === 'close') hideMenu();
     else if (act === 'skins') cycleSkin();
     else if (act === 'chat') { hideMenu(); emitTauri('pet-panel', 'chat'); playPetMotion(); }
+    // 语音对话：先写激活标记（聊天面板挂载/storage 事件消费），再以「仅显示」语义
+    // 开面板——面板已可见时也不能被收起，这点与普通对话入口的 toggle 行为不同
+    else if (act === 'voice') {
+      hideMenu();
+      localStorage.setItem('mqc.voice.pendingActivate', String(Date.now()));
+      emitTauri('pet-voice-chat', 'chat');
+      playPetMotion();
+    }
     else if (act === 'analysis') { hideMenu(); emitTauri('pet-panel', 'analysis'); }
     else if (act === 'quota') { hideMenu(); emitTauri('ball-clicked'); }
   });
@@ -291,12 +300,20 @@ export async function renderPet({ root, repo }) {
     playPetMotion();
   });
 
-  // 主窗/面板对话状态播报（思考中/已回复/出错）：本窗正在拖放分析或换装时不插话
+  // 主窗/面板对话状态播报（录音中/识别中/思考中/已回复/朗读中/出错）：
+  // 本窗正在拖放分析或换装时不插话
   void globalThis.__TAURI__?.event?.listen?.('pet-chat-status', (e) => {
     const state = e?.payload?.state;
     if (streaming || skinLoading) return;
-    if (state === 'thinking') {
+    if (state === 'recording') {
+      showBubble('🎤 主人请讲，我在听呢<span class="pet-dots"><i>·</i><i>·</i><i>·</i></span>', { autoHide: false, kind: 'status' });
+    } else if (state === 'transcribing') {
+      showBubble('让我听听你说了啥<span class="pet-dots"><i>·</i><i>·</i><i>·</i></span>', { autoHide: false, kind: 'status' });
+    } else if (state === 'thinking') {
       showBubble('让我想想哈<span class="pet-dots"><i>·</i><i>·</i><i>·</i></span>', { autoHide: false, kind: 'status' });
+      playPetMotion();
+    } else if (state === 'speaking') {
+      showBubble('我来念给你听～🔊', { autoHide: false, kind: 'status' });
       playPetMotion();
     } else if (state === 'replied') {
       showBubble(
@@ -305,6 +322,9 @@ export async function renderPet({ root, repo }) {
       );
     } else if (state === 'error') {
       showBubble('呜…好像出错了，去看看错误信息吧', { lingerMs: 6000, kind: 'status' });
+    } else if (state === 'idle') {
+      // 语音各阶段结束：仅在仍是状态气泡时收起，别误关低额度播报
+      if (bubbleKind === 'status') hideBubble();
     }
   });
 

@@ -11,13 +11,18 @@ import {
   readChatFile, agentSend, agentResolve, cancelAgent, isReadonlyTool,
 } from '../core/chat.js';
 import { readSecret } from '../core/secrets.js';
+import {
+  loadVoiceConfig, saveVoiceConfig, isVoiceConfigured,
+  hasVoiceKey, setVoiceKey, deleteVoiceKey,
+  createVoiceRecorder, transcribeAudio, speakText, stopSpeaking, speechFriendlyText,
+} from '../core/voice.js';
 import { escapeHtml } from './format.js';
 
 export function chatView() {
   return '<div class="chat-page" data-role="chat-root"></div>';
 }
 
-export function mountChatPage(el, { repo }) {
+export function mountChatPage(el, { repo, voiceDeps } = {}) {
   let config = { profiles: [], activeProfileId: null, persona: '' };
   // 多会话：sessions 为最近活跃倒序列表，messages 始终是当前会话的消息视图；
   // 空存储播种一个初始会话（两个窗口共享 storage，只有先挂载者播种生效）
@@ -42,6 +47,13 @@ export function mountChatPage(el, { repo }) {
   // 编辑中的 profile（null = 新建未开始；{...profile, key} = 编辑/新建表单内容）
   let editing = null;
   let testResult = '';
+  // 语音对话：麦克风状态机 idle→recording→transcribing；朗读播放标记；
+  // 录音器懒创建（首次点麦克风才申请 getUserMedia，避免挂载即碰媒体设备）
+  let voiceConfig = loadVoiceConfig();
+  let voiceRecorder = null;
+  let voiceState = 'idle';
+  let voicePlaying = false;
+  let voiceKeySet = false;
 
   const desktop = isChatAvailable();
   if (!desktop) {
@@ -87,6 +99,25 @@ export function mountChatPage(el, { repo }) {
         <textarea data-role="chat-persona" rows="3" placeholder="例：你是一只傲娇的猫娘桌宠…"></textarea>
       </label>
       <button class="btn" data-role="chat-persona-save">保存人设</button>
+      <div class="chat-voice-config">
+        <div class="chat-import-head">
+          <b>语音服务（OpenAI 兼容语音端点）<span class="chat-key-state ${voiceKeySet ? 'ok' : 'missing'}" data-role="chat-voice-key-state"></span></b>
+          <span class="settings-hint">语音输入与回复朗读共用一套服务，默认预置硅基流动（识别 SenseVoiceSmall 免费、合成 CosyVoice2 近零成本），换其他 OpenAI 兼容服务改地址和模型即可。</span>
+        </div>
+        <div class="chat-voice-grid">
+          <label>识别 Base URL<input data-field="voice-asr-base" placeholder="https://api.siliconflow.cn/v1"></label>
+          <label>识别模型<input data-field="voice-asr-model" placeholder="FunAudioLLM/SenseVoiceSmall"></label>
+          <label>合成 Base URL<input data-field="voice-tts-base" placeholder="https://api.siliconflow.cn/v1"></label>
+          <label>合成模型<input data-field="voice-tts-model" placeholder="FunAudioLLM/CosyVoice2-0.5B"></label>
+          <label>音色<input data-field="voice-tts-voice" placeholder="FunAudioLLM/CosyVoice2-0.5B:anna"></label>
+          <label>API Key<input data-field="voice-key" type="password" placeholder="存入 Windows 凭据管理器（留空 = 不修改）"></label>
+        </div>
+        <div class="chat-form-actions">
+          <button class="btn" data-role="chat-voice-save">保存语音设置</button>
+          <button class="btn" data-role="chat-voice-test" title="合成一句固定台词试听音色">🔊 试听</button>
+          <button class="btn danger" data-role="chat-voice-key-del" hidden>删除 Key</button>
+        </div>
+      </div>
       <p class="settings-hint" data-role="chat-test-result"></p>
     </div>
     <div class="chat-messages" data-role="chat-messages"></div>
@@ -94,7 +125,9 @@ export function mountChatPage(el, { repo }) {
     <div class="chat-input">
       <textarea data-role="chat-input" rows="2" placeholder="和桌宠聊聊（Enter 发送）"></textarea>
       <div class="chat-input-actions">
+        <button class="btn chat-mic" data-role="chat-mic" title="语音输入：点一下开始说话，再点一下识别并发送">🎙</button>
         <button class="btn" data-role="chat-attach" title="附加文件（pdf / docx / xlsx / txt / csv / json / 代码等文本类）">📎</button>
+        <button class="btn agent-toggle${voiceConfig.autoRead ? ' active' : ''}" data-role="chat-voice-toggle" title="回复朗读：模型回复完成后自动语音播报（可点此开关）">🔊 朗读</button>
         <button class="btn agent-toggle${agentMode ? ' active' : ''}" data-role="chat-agent-toggle" title="Agent 模式：AI 可调用系统工具（每次执行都需你批准）">🔧 Agent</button>
         <button class="btn agent-toggle${autoReadonly ? ' active' : ''}" data-role="agent-readonly-toggle" title="只读工具自动批准：时间/系统信息/列目录/读文件不再弹确认卡（仍记录审计日志）"${agentMode ? '' : ' hidden'}>⚡ 只读自动批准</button>
         <button class="btn primary" data-role="chat-send">发送</button>
@@ -269,6 +302,11 @@ export function mountChatPage(el, { repo }) {
     const profile = config.profiles.find((p) => p.id === config.activeProfileId);
     if (!profile) { testResult = '请先在「模型配置」中添加并启用一套配置'; showTestResult(); return; }
 
+    // 新消息打断上一条朗读（简易打断）；录音中不可能走到这里（麦克风入口已挡）
+    stopSpeaking();
+    voicePlaying = false;
+    renderMic();
+
     emitChatStatus('thinking');
     const pendingAttachments = attachments;
     attachments = [];
@@ -357,6 +395,8 @@ ${attachmentsToText(pendingAttachments)}` : text,
     appendToActiveSession({ role: 'assistant', content: reply, error, time: Date.now() });
     setStreaming(false);
     emitChatStatus(error ? 'error' : 'replied');
+    // 回复朗读（bonus 体验）：开关开着且回复正常完成才播；识别/合成失败不打扰对话
+    if (!error && reply && loadVoiceConfig().autoRead) void speakReply(reply);
   }
 
   function showTestResult() {
@@ -366,6 +406,128 @@ ${attachmentsToText(pendingAttachments)}` : text,
       const cfgPanel = $('.chat-config');
       if (cfgPanel.hidden) cfgPanel.hidden = false;
     }
+  }
+
+  // ——— 语音对话（点按说话：录音 → 识别 → 自动发送；回复完成自动朗读） ———
+
+  function renderMic() {
+    const mic = $('[data-role="chat-mic"]');
+    if (!mic) return;
+    mic.classList.toggle('recording', voiceState === 'recording');
+    mic.classList.toggle('busy', voiceState === 'transcribing' || voicePlaying);
+    mic.textContent = voiceState === 'recording' ? '⏹' : voiceState === 'transcribing' ? '⏳' : '🎙';
+  }
+
+  async function refreshVoiceKeyState() {
+    try {
+      const has = await hasVoiceKey();
+      voiceKeySet = !!has;
+      const el2 = $('[data-role="chat-voice-key-state"]');
+      if (el2) {
+        el2.textContent = has ? '✓ Key 已存' : '✗ 未设 Key';
+        el2.classList.toggle('ok', has);
+        el2.classList.toggle('missing', !has);
+      }
+      const del = $('[data-role="chat-voice-key-del"]');
+      if (del) del.hidden = !has;
+    } catch {
+      /* 桌面壳不可用（如测试环境），静态占位即可 */
+    }
+  }
+
+  function micErrorHint(e) {
+    const name = e?.name || '';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      return '麦克风权限被拒绝：请检查 Windows 设置 › 隐私 › 麦克风 是否允许桌面应用';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') return '没有检测到可用的麦克风设备';
+    if (name === 'NotReadableError') return '麦克风被其他应用占用或被系统关闭';
+    return `录音失败：${String(e?.message || e)}`;
+  }
+
+  async function handleMicClick() {
+    if (voiceState === 'recording') { finishRecording(); return; }
+    if (voiceState === 'transcribing') return; // 识别中忽略连点
+    // 开始新录音 = 打断当前朗读
+    stopSpeaking();
+    voicePlaying = false;
+    renderMic();
+    const hasKey = await hasVoiceKey().catch(() => false);
+    if (!isVoiceConfigured(loadVoiceConfig(), hasKey)) {
+      testResult = '语音服务还没配置好：请展开「模型配置」，在「语音服务」卡里保存设置并填入 API Key';
+      showTestResult();
+      return;
+    }
+    voiceRecorder = voiceRecorder || createVoiceRecorder(voiceDeps);
+    try {
+      await voiceRecorder.start({ onAutoStop: () => finishRecording() });
+    } catch (e) {
+      voiceRecorder = null;
+      testResult = micErrorHint(e);
+      showTestResult();
+      return;
+    }
+    voiceState = 'recording';
+    renderMic();
+    emitChatStatus('recording');
+  }
+
+  function finishRecording() {
+    if (voiceState !== 'recording' || !voiceRecorder) return;
+    const result = voiceRecorder.stop();
+    voiceRecorder = null;
+    voiceState = 'idle';
+    renderMic();
+    emitChatStatus('idle');
+    if (!result) return;
+    if (result.durationMs < 400) {
+      testResult = '录音太短啦，点住感觉再说一句话的功夫';
+      showTestResult();
+      return;
+    }
+    voiceState = 'transcribing';
+    renderMic();
+    emitChatStatus('transcribing');
+    void (async () => {
+      try {
+        const text = String(await transcribeAudio(result.wavBase64, loadVoiceConfig()) || '').trim();
+        voiceState = 'idle';
+        renderMic();
+        emitChatStatus('idle');
+        if (!text) { testResult = '没听清你说什么，再试一次？'; showTestResult(); return; }
+        const input = $('[data-role="chat-input"]');
+        input.value = text;
+        if (streaming) {
+          testResult = '正在回复上一条，识别文字已填入输入框';
+          showTestResult();
+          return;
+        }
+        input.value = '';
+        await doSend(text);
+      } catch (e) {
+        voiceState = 'idle';
+        renderMic();
+        emitChatStatus('idle');
+        testResult = `识别失败：${String(e?.message || e)}`;
+        showTestResult();
+      }
+    })();
+  }
+
+  async function speakReply(reply) {
+    const clean = speechFriendlyText(reply);
+    if (!clean) return;
+    voicePlaying = true;
+    renderMic();
+    emitChatStatus('speaking');
+    try {
+      await speakText(clean, loadVoiceConfig());
+    } catch {
+      /* 朗读失败静默：对话主链路不受影响 */
+    }
+    voicePlaying = false;
+    renderMic();
+    emitChatStatus('idle');
   }
 
   // ——— 事件 ———
@@ -381,6 +543,9 @@ ${attachmentsToText(pendingAttachments)}` : text,
       const text = input.value.trim();
       if (text) { input.value = ''; await doSend(text); }
     } else if (role === 'chat-stop') {
+      stopSpeaking();
+      voicePlaying = false;
+      renderMic();
       if (agentRunning) await cancelAgent().catch(() => {});
       else await cancelChat().catch(() => {});
     } else if (role === 'chat-attach') {
@@ -404,6 +569,53 @@ ${attachmentsToText(pendingAttachments)}` : text,
     } else if (role === 'chat-attach-del') {
       attachments.splice(Number(id), 1);
       renderAttachments();
+    } else if (role === 'chat-mic') {
+      void handleMicClick();
+    } else if (role === 'chat-voice-toggle') {
+      voiceConfig = saveVoiceConfig({ autoRead: !voiceConfig.autoRead });
+      btn.classList.toggle('active', voiceConfig.autoRead);
+      // 关朗读顺手停掉正在播的语音
+      if (!voiceConfig.autoRead) { stopSpeaking(); voicePlaying = false; renderMic(); }
+    } else if (role === 'chat-voice-save') {
+      const cfg = {
+        asrBaseUrl: $('[data-field="voice-asr-base"]').value.trim().replace(/\/+$/, ''),
+        asrModel: $('[data-field="voice-asr-model"]').value.trim(),
+        ttsBaseUrl: $('[data-field="voice-tts-base"]').value.trim().replace(/\/+$/, ''),
+        ttsModel: $('[data-field="voice-tts-model"]').value.trim(),
+        ttsVoice: $('[data-field="voice-tts-voice"]').value.trim(),
+      };
+      if (!cfg.asrBaseUrl || !cfg.asrModel || !cfg.ttsBaseUrl || !cfg.ttsModel || !cfg.ttsVoice) {
+        testResult = '识别/合成的 Base URL、模型和音色都不能为空';
+        showTestResult();
+        return;
+      }
+      const key = $('[data-field="voice-key"]').value.trim();
+      if (key) await setVoiceKey(key);
+      voiceConfig = saveVoiceConfig(cfg);
+      $('[data-field="voice-key"]').value = '';
+      void refreshVoiceKeyState();
+      testResult = key ? '语音设置已保存，Key 已写入凭据管理器' : '语音设置已保存';
+      showTestResult();
+    } else if (role === 'chat-voice-test') {
+      const hasKey = await hasVoiceKey().catch(() => false);
+      if (!isVoiceConfigured(loadVoiceConfig(), hasKey)) {
+        testResult = '请先保存语音设置并填入 API Key，再试听';
+        showTestResult();
+        return;
+      }
+      testResult = '合成试听中…'; showTestResult();
+      try {
+        const reason = await speakText('你好呀主人，我是你的桌宠，语音服务一切正常！', loadVoiceConfig());
+        testResult = reason === 'ended' ? '✓ 试听播放完成' : reason === 'stopped' ? '试听已打断' : '✗ 音频播放失败';
+      } catch (e) {
+        testResult = `✗ ${String(e?.message || e)}`;
+      }
+      showTestResult();
+    } else if (role === 'chat-voice-key-del') {
+      await deleteVoiceKey().catch(() => {});
+      await refreshVoiceKeyState();
+      testResult = '语音 Key 已删除';
+      showTestResult();
     } else if (role === 'chat-agent-toggle') {
       agentMode = !agentMode;
       localStorage.setItem('mqc.chat.agent', agentMode ? '1' : '0');
@@ -517,8 +729,19 @@ ${attachmentsToText(pendingAttachments)}` : text,
     }
   });
 
-  // 其他窗口（主窗 ↔ 桌宠面板）的会话变化经 storage 事件同步；流式中忽略，结束后再取
+  // 其他窗口（主窗 ↔ 桌宠面板）的会话变化经 storage 事件同步；流式中忽略，结束后再取。
+  // 语音激活标记也走 storage：桌宠菜单「语音对话」写入后，已挂载的面板在这里兜底消费
+  // （面板窗已存在时不会重新 mount）。主窗/迷你窗也会收到本事件——它们不该消费标记，
+  // 更不能删除（抢先删除会让面板永远等不到激活），不满足条件时原样留着等 30s 过期
+  const isPanelChat = () => /#panel-chat/.test(globalThis.location?.hash || '');
   globalThis.addEventListener?.('storage', (e) => {
+    if (e.key === 'mqc.voice.pendingActivate') {
+      if (isPanelChat() && Date.now() - Number(e.newValue || 0) < 30000 && voiceState === 'idle') {
+        localStorage.removeItem('mqc.voice.pendingActivate');
+        void handleMicClick();
+      }
+      return;
+    }
     if (!e.key || (e.key !== 'mqc.chat.sessions' && e.key !== 'mqc.chat.activeSession')) return;
     if (streaming) return;
     ({ sessions, activeId } = loadSessions());
@@ -580,4 +803,12 @@ ${attachmentsToText(pendingAttachments)}` : text,
 
   // 初始化
   void reloadConfig();
+  void refreshVoiceKeyState();
+  // 桌宠菜单「🎙 语音对话」= 打开聊天面板并自动开始录音：面板窗可能是刚创建的
+  // （标记写入早于挂载，storage 事件收不到），挂载时自查待激活标记兜底
+  const pendingAt = Number(localStorage.getItem('mqc.voice.pendingActivate') || 0);
+  if (pendingAt && Date.now() - pendingAt < 30000 && isPanelChat() && voiceState === 'idle') {
+    localStorage.removeItem('mqc.voice.pendingActivate');
+    void handleMicClick();
+  }
 }

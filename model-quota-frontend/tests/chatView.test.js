@@ -162,3 +162,198 @@ describe('chatView ⚡ 只读自动批准开关', () => {
     expect(localStorage.getItem('mqc.chat.agentAutoReadonly')).toBe('0');
   });
 });
+
+// ——— 语音对话（麦克风点按说话 + 回复朗读） ———
+
+function voiceStubTauri({ chatSendCapture, voiceHasKey = true } = {}) {
+  globalThis.__TAURI__ = {
+    core: {
+      invoke: vi.fn(async (cmd, args) => {
+        if (cmd === 'chat_get_config') {
+          return {
+            profiles: [{ id: 'p1', name: 'GLM', base_url: 'https://x.example', model: 'glm-4' }],
+            active_profile_id: 'p1',
+            persona: '',
+          };
+        }
+        if (cmd === 'chat_has_key') return false;
+        if (cmd === 'voice_secret_has') return voiceHasKey;
+        if (cmd === 'voice_transcribe') return '你好呀桌宠';
+        if (cmd === 'voice_speak') return btoa('fake-mp3');
+        if (cmd === 'chat_send') {
+          chatSendCapture?.push(args);
+          // 模拟流式回复后完成
+          setTimeout(() => {
+            args?.onEvent?.onmessage?.({ type: 'token', data: { text: '**你好**呀' } });
+            args?.onEvent?.onmessage?.({ type: 'done', data: { usage: null } });
+          }, 0);
+          return null;
+        }
+        return null;
+      }),
+      Channel: vi.fn(),
+    },
+    event: { emit: vi.fn(), listen: vi.fn(async () => () => {}) },
+  };
+}
+
+function fakeVoiceDeps() {
+  const state = { node: null };
+  const ctx = {
+    sampleRate: 16000,
+    createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
+    createScriptProcessor: () => {
+      const node = { onaudioprocess: null, connect: vi.fn(), disconnect: vi.fn() };
+      state.node = node;
+      return node;
+    },
+    createGain: () => ({ gain: { value: 0 }, connect: vi.fn() }),
+    destination: {},
+    close: vi.fn(async () => {}),
+  };
+  class AudioContext {
+    constructor() { return ctx; }
+  }
+  let now = 100000;
+  return {
+    deps: {
+      AudioContext,
+      targetSampleRate: 16000,
+      getUserMedia: async () => ({ getTracks: () => [{ stop: vi.fn() }] }),
+      now: () => now,
+    },
+    advance: (ms) => { now += ms; },
+    pushChunk: (d) => state.node?.onaudioprocess?.({ inputBuffer: { getChannelData: () => d } }),
+  };
+}
+
+describe('chatView 语音对话', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.body.innerHTML = '';
+    localStorage.setItem('mqc.chat.sessions', JSON.stringify([{
+      id: 's1', title: '测试会话', createdAt: 1, updatedAt: 1, messages: [],
+    }]));
+    localStorage.setItem('mqc.chat.activeSession', 's1');
+  });
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+    delete globalThis.Audio;
+  });
+
+  function mount(repo) {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: repo || { listProviders: () => [] } });
+    return root;
+  }
+
+  it('麦克风与朗读开关渲染；朗读开关默认开且可持久化', async () => {
+    voiceStubTauri();
+    const root = mount();
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-voice-toggle"]')).toBeTruthy());
+    expect(root.querySelector('[data-role="chat-mic"]').textContent).toBe('🎙');
+
+    const toggle = root.querySelector('[data-role="chat-voice-toggle"]');
+    expect(toggle.classList.contains('active')).toBe(true); // autoRead 默认开
+    toggle.click();
+    expect(toggle.classList.contains('active')).toBe(false);
+    expect(JSON.parse(localStorage.getItem('mqc.voice.config')).autoRead).toBe(false);
+  });
+
+  it('未配置语音服务时点麦克风给出配置指引', async () => {
+    voiceStubTauri({ voiceHasKey: false });
+    const root = mount();
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-mic"]')).toBeTruthy());
+    root.querySelector('[data-role="chat-mic"]').click();
+    await vi.waitFor(() => {
+      expect(root.querySelector('[data-role="chat-test-result"]').textContent).toContain('语音服务');
+    });
+    // 配置面板自动展开引导
+    expect(root.querySelector('.chat-config').hidden).toBe(false);
+  });
+
+  it('录音→识别→自动发送全链路；桌宠同步 recording/idle 状态', async () => {
+    vi.useFakeTimers();
+    try {
+      const sends = [];
+      voiceStubTauri({ chatSendCapture: sends });
+      const f = fakeVoiceDeps();
+      const root = document.createElement('div');
+      document.body.appendChild(root);
+      mountChatPage(root, { repo: { listProviders: () => [] }, voiceDeps: f.deps });
+      await vi.waitFor(() => expect(root.querySelector('[data-role="chat-mic"]')).toBeTruthy());
+
+      const mic = root.querySelector('[data-role="chat-mic"]');
+      mic.click(); // 开始录音
+      await vi.waitFor(() => expect(mic.classList.contains('recording')).toBe(true));
+      expect(globalThis.__TAURI__.event.emit).toHaveBeenCalledWith('pet-chat-status', { state: 'recording' });
+      f.pushChunk(new Float32Array(1600));
+      f.advance(2500); // 录满 2.5 秒（超过 400ms 下限）
+
+      mic.click(); // 再点 = 停止 → 识别 → 自动发送
+      await vi.waitFor(() => expect(sends).toHaveLength(1));
+      const msgs = sends[0].messages;
+      expect(msgs[msgs.length - 1].content).toBe('你好呀桌宠');
+      expect(mic.classList.contains('recording')).toBe(false);
+      const states = globalThis.__TAURI__.event.emit.mock.calls
+        .filter(([ev]) => ev === 'pet-chat-status')
+        .map(([, p]) => p.state);
+      expect(states).toContain('transcribing');
+      expect(states).toContain('idle');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('回复完成后自动朗读（朗读文本经 markdown 清洗）', async () => {
+    const speakCalls = [];
+    class FakeAudio {
+      constructor(src) { FakeAudio.instances.push(this); this.src = src; }
+      async play() {}
+      pause() { this.onpause?.(); }
+    }
+    FakeAudio.instances = [];
+    globalThis.Audio = FakeAudio;
+    globalThis.URL.createObjectURL = vi.fn(() => 'blob:test');
+    globalThis.URL.revokeObjectURL = vi.fn();
+    globalThis.__TAURI__ = {
+      core: {
+        invoke: vi.fn(async (cmd, args) => {
+          if (cmd === 'chat_get_config') {
+            return { profiles: [{ id: 'p1', name: 'GLM', base_url: 'https://x', model: 'glm-4' }], active_profile_id: 'p1', persona: '' };
+          }
+          if (cmd === 'voice_secret_has') return true;
+          if (cmd === 'voice_speak') { speakCalls.push(args); return btoa('fake-mp3'); }
+          if (cmd === 'chat_send') {
+            setTimeout(() => {
+              args?.onEvent?.onmessage?.({ type: 'token', data: { text: '**你好**呀' } });
+              args?.onEvent?.onmessage?.({ type: 'done', data: { usage: null } });
+            }, 0);
+            return null;
+          }
+          return null;
+        }),
+        Channel: vi.fn(),
+      },
+      event: { emit: vi.fn(), listen: vi.fn(async () => () => {}) },
+    };
+
+    const root = mount();
+    // 等配置异步加载完成（否则 doSend 会因"未配置模型"提前返回）
+    await vi.waitFor(() => {
+      expect(root.querySelector('[data-role="chat-profile"]').textContent).toContain('GLM');
+    });
+    const input = root.querySelector('[data-role="chat-input"]');
+    input.value = '跟我说句话';
+    root.querySelector('[data-role="chat-send"]').click();
+
+    await vi.waitFor(() => expect(speakCalls).toHaveLength(1));
+    expect(speakCalls[0].text).toBe('你好呀'); // markdown 加粗已清洗
+    expect(FakeAudio.instances).toHaveLength(1);
+    const states = globalThis.__TAURI__.event.emit.mock.calls
+      .filter(([ev]) => ev === 'pet-chat-status')
+      .map(([, p]) => p.state);
+    expect(states).toContain('speaking');
+  });
+});

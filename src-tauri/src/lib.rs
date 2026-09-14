@@ -25,6 +25,12 @@ const BALL_SIZE: f64 = 76.0;
 const PET_W: f64 = 180.0;
 const PET_H: f64 = 220.0;
 
+/// WebView2 浏览器参数：wry 默认项 + 麦克风自动授权（语音对话录音）。
+/// 注意：additionalBrowserArgs 会整体替换 wry 默认值，默认的 disable-features 必须带全；
+/// use-fake-ui-for-media-stream 免去 WebView2 权限弹窗（麦克风仍受 Windows 系统隐私开关约束）
+const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream";
+
 fn default_form() -> String {
     "pet".into()
 }
@@ -212,6 +218,7 @@ fn create_ball_window(app: &AppHandle) {
         .skip_taskbar(true)
         .resizable(false)
         .maximizable(false)
+        .additional_browser_args(BROWSER_ARGS)
         .build()
     {
         // 偏好保存的是物理坐标（Moved 事件），builder.position 只认逻辑坐标，
@@ -325,7 +332,8 @@ fn panel_anchor(app: &AppHandle, w: f64, h: f64) -> Option<(f64, f64)> {
 
 /// 打开/收起桌宠旁的功能弹窗（再次触发同面板 = 收起；两面板互斥）。
 /// 由桌宠气泡菜单的 pet-panel 事件触发，payload: "chat" / "analysis"。
-fn open_panel(app: &AppHandle, panel: &str) {
+/// force_show=true（语音对话入口）：面板已可见时仅保持显示，绝不收起
+fn open_panel(app: &AppHandle, panel: &str, force_show: bool) {
     let Some((label, url, w, h, title)) = panel_conf(panel) else { return };
     // 互斥：打开一个面板时收起另一个
     let other = if label == "panel-chat" { "panel-analysis" } else { "panel-chat" };
@@ -335,10 +343,13 @@ fn open_panel(app: &AppHandle, panel: &str) {
     let scale = scale_factor(app);
     if let Some(win) = app.webview_windows().get(label) {
         if win.is_visible().unwrap_or(false) {
-            let _ = win.hide();
-            return;
+            if !force_show {
+                let _ = win.hide();
+                return;
+            }
+        } else {
+            let _ = win.show();
         }
-        let _ = win.show();
         if let Some((x, y)) = panel_anchor(app, w, h) {
             let _ = win.set_position(PhysicalPosition::new(x as i32, y as i32));
         }
@@ -353,6 +364,7 @@ fn open_panel(app: &AppHandle, panel: &str) {
         .decorations(false)
         .always_on_top(true)
         .skip_taskbar(true)
+        .additional_browser_args(BROWSER_ARGS)
         .position(x / scale, y / scale)
         .build();
 }
@@ -415,6 +427,11 @@ pub fn run() {
             commands::quota_secret_get,
             commands::quota_secret_has,
             commands::quota_secret_delete,
+            commands::voice_secret_set,
+            commands::voice_secret_has,
+            commands::voice_secret_delete,
+            commands::voice_transcribe,
+            commands::voice_speak,
             commands::set_refresh_schedule,
             commands::update_tray_status,
             commands::chat_read_file,
@@ -556,7 +573,14 @@ pub fn run() {
             let app_for_panel = app.app_handle().clone();
             app.listen("pet-panel", move |event| {
                 let panel = serde_json::from_str::<String>(event.payload()).unwrap_or_default();
-                open_panel(&app_for_panel, &panel);
+                open_panel(&app_for_panel, &panel, false);
+            });
+
+            // 前端事件：桌宠菜单「语音对话」→ 仅显示（不 toggle 收起）聊天面板，
+            // 麦克风自动激活由前端经 localStorage 待激活标记驱动
+            let app_for_voice = app.app_handle().clone();
+            app.listen("pet-voice-chat", move |_event| {
+                open_panel(&app_for_voice, "chat", true);
             });
 
             // 前端事件：低额度系统通知，由 Rust 端发原生 Toast
