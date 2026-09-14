@@ -493,12 +493,17 @@ export async function renderPet({ root, repo }) {
     ]);
     // 库内部部分代码走全局 PIXI（Ticker 等）
     window.PIXI = pixi;
+    // pixi-live2d-display 的模型自动更新注册在 Ticker.shared 上，不随 app.ticker 的
+    // maxFPS 走——不限帧会以 60fps 空转（Cubism 动作多为 30fps 制作，高帧率纯浪费）
+    pixi.Ticker.shared.maxFPS = 30;
     Live2DModelClass = l2d.Live2DModel;
     const { Application } = pixi;
 
     app = new Application({
       backgroundAlpha: 0,
-      antialias: true,
+      // Live2D 是贴图四边形（纹理线性过滤已平滑），MSAA 收益极小却抬每帧 GPU 成本；
+      // 透明置顶窗常驻渲染，能省则省
+      antialias: false,
       autoDensity: true,
       resolution: window.devicePixelRatio || 1,
       width: stage.clientWidth,
@@ -527,6 +532,7 @@ export async function renderPet({ root, repo }) {
           import('pixi-live2d-display/cubism2'),
         ]);
         window.PIXI = pixi;
+        pixi.Ticker.shared.maxFPS = 30;
         Live2DModelClass = l2d2.Live2DModel;
         loadedRuntime = 'cubism2';
         const model = await buildModel();
