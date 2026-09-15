@@ -9,10 +9,12 @@
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Listener, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, Listener, Manager, PhysicalPosition, State, WebviewUrl,
+    WebviewWindowBuilder,
 };
 use tauri_plugin_notification::NotificationExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 mod agent;
@@ -77,6 +79,11 @@ struct ShellState {
     /// 迷你窗当前是否以「浮出」模式显示（悬浮球单击展开），
     /// 区别于托盘菜单手动打开（后者不自动收起）
     mini_flyout: Mutex<bool>,
+    /// 功能菜单展开态（桌宠窗向左/右延伸出菜单条）：展开期间 Moved 事件
+    /// 跳过位置持久化——此时窗口原点含菜单条，不能当桌宠位置存
+    menu_expanded: AtomicBool,
+    /// 菜单条在左侧还是右侧（展开时按屏幕边缘空间决定）
+    menu_side_left: AtomicBool,
 }
 
 fn prefs_path(app: &AppHandle) -> Option<PathBuf> {
@@ -224,6 +231,10 @@ fn create_ball_window(app: &AppHandle) {
         // 偏好保存的是物理坐标（Moved 事件），builder.position 只认逻辑坐标，
         // 故创建后用物理坐标归位——与 Moved 同一坐标系，重启可精确还原
         let _ = win.set_position(PhysicalPosition::new(x as i32, y as i32));
+        // 新窗从收起态开始（形态切换重建等场景下残留的展开标记会错误屏蔽位置持久化）
+        if let Some(st) = shell_state(app) {
+            st.menu_expanded.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -377,6 +388,53 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// 功能菜单条宽度（逻辑像素）：展开时桌宠窗向侧边延伸的宽度
+const MENU_STRIP_W: f64 = 160.0;
+
+/// 桌宠功能菜单展开/收起：展开时窗口向左延伸出菜单条（左侧空间不足则向右），
+/// 人物画布由前端 CSS 平移保持在原屏幕位置，收起时窗口还原。
+/// 展开期间 Moved 事件跳过位置持久化（此时窗口原点含菜单条，不能当桌宠位置存）；
+/// 收起在恢复位置之后置回标记，收起产生的 Moved 会把正确位置存回去。
+#[tauri::command]
+fn pet_menu_layout(state: State<'_, ShellState>, app: AppHandle, expand: bool) -> Result<String, String> {
+    let Some(win) = app.get_webview_window("ball") else { return Err("桌宠窗口不存在".into()) };
+    let is_pet = shell_state(&app)
+        .map(|st| st.prefs.lock().unwrap().is_pet())
+        .unwrap_or(true);
+    if !is_pet {
+        return Err("当前形态没有功能菜单".into());
+    }
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let strip = (MENU_STRIP_W * scale).round() as i32;
+    if expand {
+        if state.menu_expanded.load(Ordering::SeqCst) {
+            return Ok(if state.menu_side_left.load(Ordering::SeqCst) { "left" } else { "right" }.into());
+        }
+        let pos = win.outer_position().map_err(|e| e.to_string())?;
+        let side_left = pos.x >= strip + 8;
+        state.menu_side_left.store(side_left, Ordering::SeqCst);
+        state.menu_expanded.store(true, Ordering::SeqCst);
+        win.set_size(tauri::LogicalSize::new(PET_W + MENU_STRIP_W, PET_H))
+            .map_err(|e| e.to_string())?;
+        if side_left {
+            win.set_position(tauri::PhysicalPosition::new(pos.x - strip, pos.y))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(if side_left { "left" } else { "right" }.into())
+    } else {
+        let was_left = state.menu_side_left.load(Ordering::SeqCst);
+        state.menu_expanded.store(false, Ordering::SeqCst);
+        let pos = win.outer_position().map_err(|e| e.to_string())?;
+        win.set_size(tauri::LogicalSize::new(PET_W, PET_H))
+            .map_err(|e| e.to_string())?;
+        if was_left {
+            win.set_position(tauri::PhysicalPosition::new(pos.x + strip, pos.y))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok("close".into())
+    }
+}
+
 /// 托盘菜单打开（或聚焦）迷你小窗：手动模式，不自动收起
 fn open_mini(app: &AppHandle) {
     if let Some(w) = app.webview_windows().get("mini") {
@@ -435,6 +493,7 @@ pub fn run() {
             commands::set_refresh_schedule,
             commands::update_tray_status,
             commands::chat_read_file,
+            pet_menu_layout,
             agent::agent_send,
             agent::agent_resolve,
             agent::agent_cancel
@@ -445,6 +504,8 @@ pub fn run() {
             app.manage(ShellState {
                 prefs: Mutex::new(prefs),
                 mini_flyout: Mutex::new(false),
+                menu_expanded: AtomicBool::new(false),
+                menu_side_left: AtomicBool::new(true),
             });
             // 桌宠 AI 对话状态（配置 + 凭据 + 流式取消标志）
             app.manage(commands::ChatState::new(app.app_handle()));
@@ -627,13 +688,21 @@ pub fn run() {
                 }
             }
             if let tauri::WindowEvent::Moved(pos) = event {
-                // 悬浮球拖动后记住位置（物理坐标持久化，重启还原）
+                // 悬浮球拖动后记住位置（物理坐标持久化，重启还原）；
+                // 功能菜单展开期间窗口原点含菜单条，跳过持久化（收起时会存回正确位置）
                 if window.label() == "ball" {
-                    if let Some(st) = shell_state(window.app_handle()) {
-                        let mut prefs = st.prefs.lock().unwrap();
-                        prefs.x = Some(pos.x);
-                        prefs.y = Some(pos.y);
-                        save_prefs(window.app_handle(), &prefs);
+                    let menu_expanded = window
+                        .app_handle()
+                        .try_state::<ShellState>()
+                        .map(|st| st.menu_expanded.load(Ordering::SeqCst))
+                        .unwrap_or(false);
+                    if !menu_expanded {
+                        if let Some(st) = shell_state(window.app_handle()) {
+                            let mut prefs = st.prefs.lock().unwrap();
+                            prefs.x = Some(pos.x);
+                            prefs.y = Some(pos.y);
+                            save_prefs(window.app_handle(), &prefs);
+                        }
                     }
                 }
             }

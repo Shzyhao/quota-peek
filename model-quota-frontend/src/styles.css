@@ -2653,3 +2653,17 @@ input:disabled {
 .chat-voice-grid label:last-child {
   grid-column: 1 / -1;
 }
+
+/* ============ 功能菜单展开于桌宠窗侧边延伸条（不遮挡人物） ============ */
+/* 展开时窗口向左（屏幕左缘空间不足则向右）多出 160px 菜单条：
+   菜单定位到条内；左展开时人物画布右移 160px 保持在原屏幕位置。
+   无侧别类时回退为旧的窗内底部菜单（布局命令不可用时的兜底） */
+.pet-stage.menu-left .pet-menu,
+.pet-stage.menu-right .pet-menu {
+  top: 4px;
+  bottom: 4px;
+  max-height: none;
+}
+.pet-stage.menu-left .pet-menu { left: 4px; right: auto; width: 152px; }
+.pet-stage.menu-right .pet-menu { left: auto; right: 4px; width: 152px; }
+.pet-stage.menu-left canvas { transform: translateX(160px); }

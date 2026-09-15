@@ -72,7 +72,32 @@ export async function renderPet({ root, repo }) {
   bubble.addEventListener('click', hideBubble);
 
   // ——— 功能气泡菜单（点击桌宠弹出）：功能入口 + 自定义形象（如有） ———
-  // 内置 20 套皮肤不内联展示，换装走「下一套」循环与设置页下拉
+  // 菜单展开在桌宠窗侧边延伸条内（默认左侧，屏幕左缘空间不足时自动换右侧），
+  // 不遮挡人物；窗口扩缩与位移由 Rust 命令 pet_menu_layout 完成，
+  // 人物画布经 CSS 平移（.menu-left canvas）保持在原屏幕位置
+
+  let menuSide = null;           // 当前展开侧 'left' | 'right' | null
+  let menuCollapsePending = false; // 拖动时延迟到 mouseup 再还原窗口（避免与原生拖动抢位置）
+
+  function setMenuSide(side) {
+    stage.classList.toggle('menu-left', side === 'left');
+    stage.classList.toggle('menu-right', side === 'right');
+  }
+
+  async function expandMenuWindow() {
+    const side = await globalThis.__TAURI__?.core?.invoke?.('pet_menu_layout', { expand: true });
+    menuSide = side === 'right' ? 'right' : 'left';
+    setMenuSide(menuSide);
+    menu.hidden = false;
+  }
+
+  function collapseMenuWindow() {
+    menuCollapsePending = false;
+    if (!menuSide) return;
+    menuSide = null;
+    setMenuSide(null);
+    void globalThis.__TAURI__?.core?.invoke?.('pet_menu_layout', { expand: false }).catch(() => {});
+  }
 
   function renderMenu() {
     const customs = listCustomModels();
@@ -93,11 +118,13 @@ export async function renderPet({ root, repo }) {
   function showMenu() {
     renderMenu();
     hideBubble();
-    menu.hidden = false;
+    void expandMenuWindow().catch(() => { menu.hidden = false; }); // 布局失败回退为窗内菜单
   }
 
   function hideMenu() {
+    if (menu.hidden && !menuSide) return;
     menu.hidden = true;
+    collapseMenuWindow();
   }
 
   menu.addEventListener('click', (e) => {
@@ -237,12 +264,21 @@ export async function renderPet({ root, repo }) {
     if (Math.hypot(e.screenX - press.x, e.screenY - press.y) > 6) {
       dragged = true;
       press = null;
-      hideMenu();
+      // 拖动时只收菜单面板：窗口保持展开（画布平移类保留，人物位置连续），
+      // 还原延迟到 mouseup——此时还原按当前位置右移补偿，拖到哪就停哪
+      if (menuSide) {
+        menu.hidden = true;
+        menuCollapsePending = true;
+      }
       globalThis.__TAURI__?.window?.getCurrentWindow?.()?.startDragging?.();
     }
   });
   root.addEventListener('mouseup', () => {
     press = null;
+    if (menuCollapsePending) {
+      menuCollapsePending = false;
+      collapseMenuWindow();
+    }
   });
 
   // 原地单击 = 弹出/收起功能气泡菜单（配合随机小动作）。
@@ -251,6 +287,11 @@ export async function renderPet({ root, repo }) {
   root.addEventListener('click', (e) => {
     if (!e.target.isConnected) return;
     if (e.target.closest('.pet-bubble, .pet-menu')) return;
+    // 拖动收起的窗口还原若被原生拖动吞掉 mouseup 而没执行，这里兜底
+    if (menuCollapsePending) {
+      collapseMenuWindow();
+      return;
+    }
     if (dragged) {
       dragged = false;
       return;
