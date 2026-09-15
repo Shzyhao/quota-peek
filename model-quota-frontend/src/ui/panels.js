@@ -1,8 +1,9 @@
-// 独立功能弹窗（#panel-chat / #panel-analysis）：从桌宠气泡菜单打开的
+// 独立功能弹窗（#panel-chat / #panel-analysis / #panel-schedule）：从桌宠气泡菜单打开的
 // 小型功能窗，复用主窗对应页的自挂载组件；自绘标题栏（可拖动 + 收起按钮）。
 
 import { chatView, mountChatPage } from './chatView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
+import { scheduleView, mountSchedulePage } from './scheduleView.js';
 
 function panelShell(root, title, body) {
   document.documentElement.classList.add('panel-mode');
@@ -21,10 +22,23 @@ function panelShell(root, title, body) {
 
 export function renderChatPanel({ root, repo }) {
   panelShell(root, '对话 · 桌看', '');
-  mountChatPage(root.querySelector('[data-role="panel-root"]'), { repo });
+  // 面板模式：只留会话与对话内容，模型/语音配置回主窗设置（panel 选项隐藏配置入口）
+  mountChatPage(root.querySelector('[data-role="panel-root"]'), { repo, panel: true });
 }
 
 export function renderAnalysisPanel({ root }) {
   panelShell(root, '文件分析 · 桌看', '');
   mountAnalysisPage(root.querySelector('[data-role="panel-root"]'));
+}
+
+export function renderSchedulePanel({ root, repo }) {
+  panelShell(root, '日程 · 桌看', '');
+  const host = root.querySelector('[data-role="panel-root"]');
+  const mountPage = () => mountSchedulePage(host, { repo });
+  mountPage();
+  // 主窗改动跨窗同步：storage 事件只在本窗以外写入时触发，整页重挂载即可
+  // （mountSchedulePage 的监听挂在自建子节点上，重挂载不堆积）
+  globalThis.addEventListener?.('storage', (e) => {
+    if (e?.key === 'mqc.schedules') mountPage();
+  });
 }

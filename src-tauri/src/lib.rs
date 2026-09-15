@@ -14,7 +14,7 @@ use tauri::{
 };
 use tauri_plugin_notification::NotificationExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 mod agent;
@@ -84,6 +84,12 @@ struct ShellState {
     menu_expanded: AtomicBool,
     /// 菜单条在左侧还是右侧（展开时按屏幕边缘空间决定）
     menu_side_left: AtomicBool,
+    /// 对话气泡展开态（桌宠窗向上/向下长出气泡条）：同菜单跳过位置持久化
+    bubble_expanded: AtomicBool,
+    /// 气泡条在人物上方还是下方（按窗口距屏幕顶部的余量决定）
+    bubble_up: AtomicBool,
+    /// 当前气泡条高度（逻辑像素）：前端按气泡内容量高传过来，流式变高时增量调整
+    bubble_strip: AtomicU32,
 }
 
 fn prefs_path(app: &AppHandle) -> Option<PathBuf> {
@@ -119,8 +125,10 @@ fn scale_factor(app: &AppHandle) -> f64 {
         .unwrap_or(1.0)
 }
 
-/// 以物理坐标锚点（窗口右下角对齐处）弹出迷你窗：已存在则移动显示，否则创建
-fn show_mini_at(app: &AppHandle, anchor_x: f64, anchor_y: f64) {
+/// 以物理坐标锚点（窗口右下角对齐处）弹出迷你窗：已存在则移动显示，否则创建。
+/// flyout=true（悬浮球单击展开）时鼠标移出自动收起；false（托盘/桌宠菜单打开）
+/// 为固定模式，不随鼠标移出收起，只经关闭按钮或托盘交互消失
+fn show_mini_at(app: &AppHandle, anchor_x: f64, anchor_y: f64, flyout: bool) {
     let scale = scale_factor(app);
     let (w, h) = (MINI_W * scale, MINI_H * scale);
     let x = (anchor_x - w).max(8.0);
@@ -130,7 +138,7 @@ fn show_mini_at(app: &AppHandle, anchor_x: f64, anchor_y: f64) {
         let _ = win.set_position(PhysicalPosition::new(x as i32, y as i32));
         let _ = win.show();
     } else {
-        let _ = WebviewWindowBuilder::new(app, "mini", WebviewUrl::App("index.html#mini".into()))
+        let built = WebviewWindowBuilder::new(app, "mini", WebviewUrl::App("index.html#mini".into()))
             .title("额度速览")
             .inner_size(MINI_W, MINI_H)
             .decorations(false)
@@ -138,11 +146,23 @@ fn show_mini_at(app: &AppHandle, anchor_x: f64, anchor_y: f64) {
             .maximizable(false)
             .always_on_top(true)
             .skip_taskbar(true)
+            // 必须与 ball/panel 窗口一致：WebView2 的浏览器参数不一致会导致
+            // 新环境静默创建失败（窗口注册了但 HWND/内容永远出不来）
+            .additional_browser_args(BROWSER_ARGS)
             .position(x / scale, y / scale)
             .build();
+        // 诊断：创建失败静默会表现为"点了没反应"，落盘错误与锚点供排查
+        if let Err(e) = built {
+            if let Some(dir) = app.path().app_config_dir().ok() {
+                let _ = std::fs::write(
+                    dir.join("mini-error.txt"),
+                    format!("anchor=({anchor_x},{anchor_y}) scale={scale} err={e:?}"),
+                );
+            }
+        }
     }
     if let Some(st) = shell_state(app) {
-        *st.mini_flyout.lock().unwrap() = true;
+        *st.mini_flyout.lock().unwrap() = flyout;
     }
 }
 
@@ -234,6 +254,7 @@ fn create_ball_window(app: &AppHandle) {
         // 新窗从收起态开始（形态切换重建等场景下残留的展开标记会错误屏蔽位置持久化）
         if let Some(st) = shell_state(app) {
             st.menu_expanded.store(false, Ordering::SeqCst);
+            st.bubble_expanded.store(false, Ordering::SeqCst);
         }
     }
 }
@@ -314,9 +335,13 @@ fn panel_conf(panel: &str) -> Option<(&'static str, &'static str, f64, f64, &'st
     match panel {
         "chat" => Some(("panel-chat", "index.html#panel-chat", 450.0, 560.0, "桌看 · 对话")),
         "analysis" => Some(("panel-analysis", "index.html#panel-analysis", 480.0, 560.0, "桌看 · 文件分析")),
+        "schedule" => Some(("panel-schedule", "index.html#panel-schedule", 500.0, 620.0, "桌看 · 日程")),
         _ => None,
     }
 }
+
+/// 全部功能弹窗 label（互斥切换与批体收起用）
+const PANEL_LABELS: [&str; 3] = ["panel-chat", "panel-analysis", "panel-schedule"];
 
 /// 计算功能弹窗锚定桌宠旁的物理坐标：优先右侧，放不下换左侧，整体钳制屏幕内
 fn panel_anchor(app: &AppHandle, w: f64, h: f64) -> Option<(f64, f64)> {
@@ -341,15 +366,18 @@ fn panel_anchor(app: &AppHandle, w: f64, h: f64) -> Option<(f64, f64)> {
     Some((x, y))
 }
 
-/// 打开/收起桌宠旁的功能弹窗（再次触发同面板 = 收起；两面板互斥）。
-/// 由桌宠气泡菜单的 pet-panel 事件触发，payload: "chat" / "analysis"。
+/// 打开/收起桌宠旁的功能弹窗（再次触发同面板 = 收起；各面板互斥）。
+/// 由桌宠气泡菜单的 pet-panel 事件触发，payload: "chat" / "analysis" / "schedule"。
 /// force_show=true（语音对话入口）：面板已可见时仅保持显示，绝不收起
 fn open_panel(app: &AppHandle, panel: &str, force_show: bool) {
     let Some((label, url, w, h, title)) = panel_conf(panel) else { return };
-    // 互斥：打开一个面板时收起另一个
-    let other = if label == "panel-chat" { "panel-analysis" } else { "panel-chat" };
-    if let Some(o) = app.webview_windows().get(other) {
-        let _ = o.hide();
+    // 互斥：打开一个面板时收起其余面板
+    for other in PANEL_LABELS {
+        if other != label {
+            if let Some(o) = app.webview_windows().get(other) {
+                let _ = o.hide();
+            }
+        }
     }
     let scale = scale_factor(app);
     if let Some(win) = app.webview_windows().get(label) {
@@ -388,8 +416,22 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// 桌宠气泡播报是否可用（ball 窗存在且当前形态是 pet）：
+/// 日程提醒据此选择播报通道（桌宠气泡 or 系统 Toast），供 commands 调度线程调用
+pub fn pet_bubble_available(app: &AppHandle) -> bool {
+    app.webview_windows().get("ball").is_some()
+        && shell_state(app)
+            .map(|st| st.prefs.lock().unwrap().is_pet())
+            .unwrap_or(true)
+}
+
 /// 功能菜单条宽度（逻辑像素）：展开时桌宠窗向侧边延伸的宽度
 const MENU_STRIP_W: f64 = 160.0;
+
+/// 气泡区高度兜底值（逻辑像素）：前端未传延伸高度时使用。
+/// 延伸高度随内容自适应（前端量测传入，钳制 0–120）；小气泡浮在画布固有留白里
+/// 不延伸窗口，只有超过留白才向上/向下长，气泡底边始终离人物头顶约 10px
+const BUBBLE_STRIP_H: f64 = 130.0;
 
 /// 桌宠功能菜单展开/收起：展开时窗口向左延伸出菜单条（左侧空间不足则向右），
 /// 人物画布由前端 CSS 平移保持在原屏幕位置，收起时窗口还原。
@@ -429,6 +471,70 @@ fn pet_menu_layout(state: State<'_, ShellState>, app: AppHandle, expand: bool) -
             .map_err(|e| e.to_string())?;
         if was_left {
             win.set_position(tauri::PhysicalPosition::new(pos.x + strip, pos.y))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok("close".into())
+    }
+}
+
+/// 桌宠对话气泡展开/收起：显示气泡时窗口向上长出气泡条（顶部空间不足则向下），
+/// 人物画布经 CSS 平移保持在原屏幕位置，气泡绝不遮挡人物。展开期间 Moved 事件
+/// 跳过位置持久化（窗口原点含气泡条，不能当桌宠位置存）；收起先清标记再还原，
+/// 让收起产生的 Moved 把正确位置存回去。与 pet_menu_layout 互斥使用（前端保证）。
+#[tauri::command]
+fn pet_bubble_layout(state: State<'_, ShellState>, app: AppHandle, expand: bool, strip: Option<f64>) -> Result<String, String> {
+    let Some(win) = app.get_webview_window("ball") else { return Err("桌宠窗口不存在".into()) };
+    let is_pet = shell_state(&app)
+        .map(|st| st.prefs.lock().unwrap().is_pet())
+        .unwrap_or(true);
+    if !is_pet {
+        return Err("当前形态没有对话气泡".into());
+    }
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let want = strip.unwrap_or(BUBBLE_STRIP_H).clamp(0.0, 120.0);
+    if expand {
+        if state.bubble_expanded.load(Ordering::SeqCst) {
+            // 已展开：流式内容变高/变矮 → 按差量增量调整尺寸与位置
+            let old = f64::from(state.bubble_strip.load(Ordering::SeqCst));
+            let delta = want - old;
+            if delta.abs() < 1.0 {
+                return Ok(if state.bubble_up.load(Ordering::SeqCst) { "up" } else { "down" }.into());
+            }
+            state.bubble_strip.store(want.round() as u32, Ordering::SeqCst);
+            win.set_size(tauri::LogicalSize::new(PET_W, PET_H + want))
+                .map_err(|e| e.to_string())?;
+            if state.bubble_up.load(Ordering::SeqCst) {
+                let pos = win.outer_position().map_err(|e| e.to_string())?;
+                win.set_position(tauri::PhysicalPosition::new(pos.x, pos.y - (delta * scale).round() as i32))
+                    .map_err(|e| e.to_string())?;
+            }
+            return Ok(if state.bubble_up.load(Ordering::SeqCst) { "up" } else { "down" }.into());
+        }
+        let strip_px = (want * scale).round() as i32;
+        let pos = win.outer_position().map_err(|e| e.to_string())?;
+        let up = pos.y >= strip_px + 8;
+        state.bubble_strip.store(want.round() as u32, Ordering::SeqCst);
+        state.bubble_up.store(up, Ordering::SeqCst);
+        state.bubble_expanded.store(true, Ordering::SeqCst);
+        win.set_size(tauri::LogicalSize::new(PET_W, PET_H + want))
+            .map_err(|e| e.to_string())?;
+        if up {
+            win.set_position(tauri::PhysicalPosition::new(pos.x, pos.y - strip_px))
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(if up { "up" } else { "down" }.into())
+    } else {
+        if !state.bubble_expanded.load(Ordering::SeqCst) {
+            return Ok("close".into());
+        }
+        let was_up = state.bubble_up.load(Ordering::SeqCst);
+        let strip_px = (f64::from(state.bubble_strip.load(Ordering::SeqCst)) * scale).round() as i32;
+        state.bubble_expanded.store(false, Ordering::SeqCst);
+        let pos = win.outer_position().map_err(|e| e.to_string())?;
+        win.set_size(tauri::LogicalSize::new(PET_W, PET_H))
+            .map_err(|e| e.to_string())?;
+        if was_up {
+            win.set_position(tauri::PhysicalPosition::new(pos.x, pos.y + strip_px))
                 .map_err(|e| e.to_string())?;
         }
         Ok("close".into())
@@ -492,8 +598,10 @@ pub fn run() {
             commands::voice_speak,
             commands::set_refresh_schedule,
             commands::update_tray_status,
+            commands::set_schedule_reminders,
             commands::chat_read_file,
             pet_menu_layout,
+            pet_bubble_layout,
             agent::agent_send,
             agent::agent_resolve,
             agent::agent_cancel
@@ -506,6 +614,9 @@ pub fn run() {
                 mini_flyout: Mutex::new(false),
                 menu_expanded: AtomicBool::new(false),
                 menu_side_left: AtomicBool::new(true),
+                bubble_expanded: AtomicBool::new(false),
+                bubble_up: AtomicBool::new(true),
+                bubble_strip: AtomicU32::new(0),
             });
             // 桌宠 AI 对话状态（配置 + 凭据 + 流式取消标志）
             app.manage(commands::ChatState::new(app.app_handle()));
@@ -520,6 +631,13 @@ pub fn run() {
             });
             commands::spawn_refresh_scheduler(app.app_handle().clone(), sched.clone());
             app.manage(sched);
+
+            // 日程提醒调度：恢复 schedule.json（队列 + 已触发集合）后启动常驻线程，
+            // 到点桌宠气泡播报（pet_bubble_available 为真）或回退系统通知
+            let reminder = std::sync::Arc::new(commands::ReminderState::default());
+            commands::load_persisted_schedule(app.app_handle(), &reminder);
+            commands::spawn_schedule_reminder(app.app_handle().clone(), reminder.clone());
+            app.manage(reminder);
 
             // Agent 状态（单飞循环 + 待确认调用 + 审计）
             app.manage(agent::AgentState::new());
@@ -582,7 +700,7 @@ pub fn run() {
                 hide_mini_flyout(&app_for_events);
             });
 
-            // 前端事件：单击悬浮球 → 在球旁展开/收起迷你窗
+            // 前端事件：单击悬浮球 → 在球旁展开/收起迷你窗（飞出模式：鼠标移出自动收起）
             let app_for_ball = app.app_handle().clone();
             app.listen("ball-clicked", move |_| {
                 let app = &app_for_ball;
@@ -598,10 +716,25 @@ pub fn run() {
                     hide_mini_flyout(app);
                 } else if let Some(ball) = app.webview_windows().get("ball") {
                     if let (Ok(pos), Ok(size)) = (ball.outer_position(), ball.outer_size()) {
-                        // 迷你窗右下角对齐到球心（全部物理坐标）
-                        show_mini_at(app, pos.x as f64, (pos.y + size.height as i32 / 2) as f64);
+                        show_mini_at(app, pos.x as f64, (pos.y + size.height as i32 / 2) as f64, true);
                     }
                 }
+            });
+
+            // 前端事件：桌宠菜单「额度速览」→ 锚定桌宠旁打开迷你窗（固定模式：
+            // 不随鼠标移出收起——菜单点开后迷你窗恰好出现在原菜单位置，飞出语义
+            // 会因鼠标移出被立刻收起，表现为"点了没反应"）。等菜单收起完成后再开窗，
+            // 避免读到收起过渡中的窗口位置；桌宠未开时回退托盘式打开
+            let app_for_quota = app.app_handle().clone();
+            app.listen("pet-quota", move |_| {
+                let app = &app_for_quota;
+                if let Some(ball) = app.webview_windows().get("ball") {
+                    if let (Ok(pos), Ok(size)) = (ball.outer_position(), ball.outer_size()) {
+                        show_mini_at(app, pos.x as f64, (pos.y + size.height as i32 / 2) as f64, false);
+                        return;
+                    }
+                }
+                open_mini(app);
             });
 
             // 前端事件：主界面顶栏按钮 / 设置页开关 → 设置悬浮球显隐（payload: true/false）
@@ -689,14 +822,17 @@ pub fn run() {
             }
             if let tauri::WindowEvent::Moved(pos) = event {
                 // 悬浮球拖动后记住位置（物理坐标持久化，重启还原）；
-                // 功能菜单展开期间窗口原点含菜单条，跳过持久化（收起时会存回正确位置）
+                // 功能菜单/对话气泡展开期间窗口原点含延伸条，跳过持久化（收起时会存回正确位置）
                 if window.label() == "ball" {
-                    let menu_expanded = window
+                    let expanded = window
                         .app_handle()
                         .try_state::<ShellState>()
-                        .map(|st| st.menu_expanded.load(Ordering::SeqCst))
+                        .map(|st| {
+                            st.menu_expanded.load(Ordering::SeqCst)
+                                || st.bubble_expanded.load(Ordering::SeqCst)
+                        })
                         .unwrap_or(false);
-                    if !menu_expanded {
+                    if !expanded {
                         if let Some(st) = shell_state(window.app_handle()) {
                             let mut prefs = st.prefs.lock().unwrap();
                             prefs.x = Some(pos.x);

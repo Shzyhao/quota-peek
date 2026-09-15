@@ -9,11 +9,14 @@ import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
 import { chatView, mountChatPage } from './chatView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
+import { scheduleView, mountSchedulePage } from './scheduleView.js';
+import { syncScheduleReminders } from '../core/schedule.js';
 import { mountPetAppearanceCard } from './petSettings.js';
 import { updateTrayStatus } from './trayStatus.js';
 
 const NAV_ITEMS = [
   { view: 'home', label: '首页', icon: 'M4 11l8-7 8 7M6 10v9h12v-9' },
+  { view: 'schedule', label: '日程', icon: 'M8 3v4M16 3v4M4 9h16M5 5h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z' },
   { view: 'chat', label: '对话', icon: 'M4 4h16v12H8l-4 4z' },
   { view: 'analysis', label: '文件分析', icon: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13h6M9 17h4' },
   { view: 'overview', label: '额度总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
@@ -24,6 +27,7 @@ const NAV_ITEMS = [
 
 const VIEW_RENDERERS = {
   home: homeView,
+  schedule: scheduleView,
   overview: overviewView,
   chat: chatView,
   analysis: analysisView,
@@ -286,7 +290,7 @@ export function renderApp({ root, repo, logger, service }) {
     const ok = await styledConfirm({
       mount: document.body,
       title: '导入备份',
-      message: `将覆盖当前数据：${parsed.backup.providers.length} 个供应商、${(parsed.backup.logs || []).length} 条日志。此操作不可撤销，确定继续吗？`,
+      message: `将覆盖当前数据：${parsed.backup.providers.length} 个供应商、${(parsed.backup.logs || []).length} 条日志、${(parsed.backup.schedules || []).length} 条日程。此操作不可撤销，确定继续吗？`,
       confirmText: '覆盖导入',
       danger: true,
     });
@@ -405,13 +409,16 @@ export function renderApp({ root, repo, logger, service }) {
     };
     const content = root.querySelector('[data-role="view-content"]');
     if (content) content.innerHTML = VIEW_RENDERERS[view](ctx);
-    // 对话/文件分析页是自挂载组件（自带事件与流式状态），模板渲染后初始化
+    // 对话/文件分析/日程页是自挂载组件（自带事件与流式状态），模板渲染后初始化
     if (view === 'chat') {
       const chatRoot = content.querySelector('[data-role="chat-root"]');
       if (chatRoot) mountChatPage(chatRoot, { repo });
     } else if (view === 'analysis') {
       const analysisRoot = content.querySelector('[data-role="analysis-root"]');
       if (analysisRoot) mountAnalysisPage(analysisRoot);
+    } else if (view === 'schedule') {
+      const scheduleRoot = content.querySelector('[data-role="schedule-root"]');
+      if (scheduleRoot) mountSchedulePage(scheduleRoot, { repo });
     } else if (view === 'settings') {
       mountPetAppearanceCard(content);
     }
@@ -599,13 +606,25 @@ export function renderApp({ root, repo, logger, service }) {
     void tauriEvents.listen('backend-refresh-due', () => {
       void refreshAll({ silent: true });
     });
+    // 日程提醒队列将耗尽（7 天同步窗口用完）：重算未来实例补给后端调度线程
+    void tauriEvents.listen('schedule-queue-low', () => {
+      syncScheduleReminders(repo);
+    });
   }
+
+  // 日程面板窗改动跨窗同步：storage 事件只在本窗以外写入时触发，
+  // 停留在日程页时整页重绘；提醒由面板窗自己同步过，这里只管界面
+  globalThis.addEventListener?.('storage', (e) => {
+    if (e?.key === 'mqc.schedules' && currentView() === 'schedule') renderContentView();
+  });
 
   scheduleAutoRefresh();
   render();
   // 启动只初始化托盘动态图标；不触发提醒（提醒只在刷新产出新告警时出现，
   // 避免每次打开应用都对存量告警重复弹窗）
   void updateTrayStatus(repo, settings);
+  // 启动即把日程提醒实例同步给后端调度线程（含应用关闭期间错过的，由 Rust 判定补报）
+  syncScheduleReminders(repo);
 
   return { refreshAll, refreshOne, render, importFromText, exportBackup, deleteProvider, clearAll };
 }

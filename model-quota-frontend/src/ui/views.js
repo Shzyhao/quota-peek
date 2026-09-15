@@ -16,6 +16,7 @@ const LOG_STATUS_LABELS = { ok: '成功', failed: '失败', unsupported: '不支
 
 const VIEW_TITLES = {
   home: '首页',
+  schedule: '日程与待办',
   overview: '额度总览',
   chat: '对话',
   analysis: '文件分析',
@@ -233,6 +234,11 @@ export function homeView(ctx) {
           <span class="home-card-icon">📄</span>
           <b>文件分析</b>
           <small>拖入文档即分析 · md/pdf/xlsx/docx · 可保存报告</small>
+        </button>
+        <button class="home-card" data-action="nav" data-view="schedule">
+          <span class="home-card-icon">📅</span>
+          <b>日程与待办</b>
+          <small>月历记录 · 到点桌宠提醒 · 待办打勾</small>
         </button>
         <button class="home-card" data-action="nav" data-view="overview">
           <span class="home-card-icon">📊</span>

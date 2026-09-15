@@ -1434,7 +1434,8 @@ select {
 
 .home-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* 自适应列：首页功能卡片 4 张（v0.10.0 起含日程与待办）宽屏一排铺开，窄屏换行 */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 14px;
 }
 
@@ -1885,33 +1886,41 @@ html.pet-mode #app {
   pointer-events: none;
 }
 
-/* 桌宠对话气泡：悬浮在人物上方，半透明玻璃质感，点击关闭 */
+/* 桌宠对话气泡：小气泡直接浮在人物画布固有顶部留白里（窗口不动）；
+   内容超过留白时窗口经 pet_bubble_layout 向上/向下延伸（高度=超出部分，
+   由前端量测传入），画布经 .bubble-top canvas 位移保持原屏幕位置，
+   气泡底边始终离头顶约 10px，绝不遮挡人物。最多显示五行，超出内部滚动 */
 .pet-bubble {
   position: absolute;
   left: 8px;
   right: 8px;
-  bottom: 8px;
-  max-height: 62%;
+  top: 4px;
+  max-height: 125px; /* 五行封顶：5 × 21px 行高 + 18px 内边距 + 2px 边框 */
 
-  /* 播报类长内容（桌宠告警台词）临时加高，避免恢复报喜等尾部信息被裁切 */
+  /* 播报类长内容（桌宠告警台词）字号略小，超出五行在气泡内滚动 */
   &.tall {
-    max-height: 86%;
     font-size: 12px;
   }
   overflow-y: auto;
-  padding: 10px 12px;
+  padding: 9px 12px;
   border-radius: 12px;
-  background: rgba(30, 36, 48, 0.82);
-  color: #f1f5fb;
+  border: 1px solid rgba(196, 164, 96, 0.45);
+  background: #fdf7e7;
+  color: #4a4030;
   font-size: 13px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 6px 18px rgba(120, 92, 30, 0.22);
   cursor: pointer;
   z-index: 3;
   animation: pet-bubble-in 0.18s var(--ease);
 }
+
+/* 窗口向上长出气泡条：画布下移一个条高（JS 按实际量高设置 --bubble-strip），人物保持在原屏幕位置 */
+.pet-stage.bubble-top canvas { transform: translateY(var(--bubble-strip, 0px)); }
+/* 顶部没空间、窗口向下长：气泡条在人物下方，画布不动 */
+.pet-stage.bubble-bottom .pet-bubble { top: auto; bottom: 6px; }
 
 /* 会话附件条与附件 chips */
 .chat-attachments {
@@ -2015,15 +2024,16 @@ html.pet-mode #app {
 
 .pet-typing { opacity: 0.6; letter-spacing: 2px; }
 
-/* 桌宠功能气泡菜单：点击桌宠弹出，功能区入口 + 换装皮肤网格 */
+/* 桌宠功能气泡菜单：点击桌宠弹出，功能区入口 + 换装皮肤网格。
+   两层结构：固定顶栏（关闭按钮钉住，不随内容滚动）+ 可滚动列表区 */
 .pet-menu {
   position: absolute;
   left: 8px;
   right: 8px;
   bottom: 8px;
   max-height: 88%;
-  overflow-y: auto;
-  padding: 8px 8px 10px;
+  /* v0.10.0 菜单增至 6 项：收紧 padding/间距让全部条目在桌宠窗内放下不出现滚动条 */
+  padding: 4px 8px 5px;
   border-radius: 12px;
   background: rgba(30, 36, 48, 0.92);
   color: #f1f5fb;
@@ -2031,46 +2041,54 @@ html.pet-mode #app {
   z-index: 4;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   animation: pet-bubble-in 0.18s var(--ease);
+  overflow: hidden;
 }
 
+/* 固定顶栏：只放关闭按钮，永远钉在菜单最上方 */
 .pet-menu-head {
+  flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 2px 4px 6px;
-  font-size: 12px;
-  color: rgba(241, 245, 251, 0.75);
+  justify-content: flex-end;
+  min-height: 18px;
 }
 
-.pet-menu-head b { font-size: 13px; color: #f1f5fb; }
-
-.pet-menu-head button {
-  border: none;
-  background: rgba(255, 255, 255, 0.12);
-  color: #f1f5fb;
-  border-radius: 8px;
-  padding: 2px 8px;
-  font-size: 12px;
-  cursor: pointer;
+/* 可滚动列表区：条目超高等内容收缩滚动，顶栏不受影响；
+   滚动条细窄化，避免 Windows 经典滚动条挤占条目文字宽度 */
+.pet-menu-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
 }
+.pet-menu-body::-webkit-scrollbar { width: 4px; }
+.pet-menu-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 2px;
+}
+.pet-menu-body::-webkit-scrollbar-track { background: transparent; }
 
-.pet-menu > button,
-.pet-menu [data-skin] {
+.pet-menu-body > button,
+.pet-menu-body [data-skin] {
   border: none;
   background: rgba(255, 255, 255, 0.08);
   color: #f1f5fb;
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 5px 10px;
   font-size: 13px;
   text-align: left;
   cursor: pointer;
   transition: background var(--dur) var(--ease);
 }
 
-.pet-menu > button:hover,
-.pet-menu [data-skin]:hover { background: rgba(120, 160, 255, 0.35); }
+.pet-menu-body > button:hover,
+.pet-menu-body [data-skin]:hover { background: rgba(120, 160, 255, 0.35); }
 
 .pet-skin-grid {
   display: grid;
@@ -2574,28 +2592,27 @@ input:disabled {
   background: var(--bg-soft);
 }
 
-/* 功能菜单右上角关闭按钮：与首行按钮垂直居中（菜单 padding 8px + (行高33.6-22)/2 ≈ 14px） */
+/* 功能菜单顶栏关闭按钮：固定在顶栏右侧，不随列表滚动、不被条目压住 */
 .pet-menu-close {
-  position: absolute !important;
-  top: 14px;
-  right: 4px;
-  width: 22px;
-  height: 22px;
-  min-height: 0 !important;
-  padding: 0 !important;
-  border-radius: 50%;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  font-size: 15px !important;
-  line-height: 1 !important;
-  color: rgba(241, 245, 251, 0.7) !important;
-  background: transparent !important;
+  border: none;
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: rgba(241, 245, 251, 0.7);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease);
 }
 
 .pet-menu-close:hover {
-  color: #fff !important;
-  background: rgba(255, 255, 255, 0.16) !important;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
 }
 
 /* ============ 语音对话（麦克风点按说话 + 回复朗读 + 语音服务配置） ============ */
@@ -2667,3 +2684,143 @@ input:disabled {
 .pet-stage.menu-left .pet-menu { left: 4px; right: auto; width: 152px; }
 .pet-stage.menu-right .pet-menu { left: auto; right: 4px; width: 152px; }
 .pet-stage.menu-left canvas { transform: translateX(160px); }
+
+/* ============ 日程与待办（主窗「日程」页 / 桌宠日程面板共用） ============ */
+.schedule-page { height: 100%; }
+.schedule-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 264px;
+  gap: 18px;
+  align-items: start;
+}
+/* 桌宠日程面板窄窗：侧栏下移单列排布 */
+.panel-mode .schedule-layout { grid-template-columns: 1fr; gap: 12px; }
+
+.schedule-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.schedule-nav { display: flex; align-items: center; gap: 6px; }
+.schedule-month { font-size: 15px; min-width: 96px; text-align: center; }
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.calendar-weekname {
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 0 4px;
+}
+.calendar-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 46px;
+  padding: 5px 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.calendar-cell:hover { border-color: var(--primary); }
+.calendar-cell.dim .cal-day { color: var(--muted); opacity: 0.55; }
+.calendar-cell.today .cal-day {
+  background: var(--primary);
+  color: var(--on-primary);
+  border-radius: 50%;
+}
+.calendar-cell.sel {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+.cal-day { font-size: 13px; line-height: 20px; width: 20px; text-align: center; }
+.cal-dots { display: flex; align-items: center; gap: 3px; min-height: 6px; }
+.cal-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.cal-dot.allday { background: var(--ok); }
+.cal-dot.done { background: var(--border-strong); }
+.cal-more { font-size: 10px; color: var(--muted); font-style: normal; }
+
+.schedule-side { display: flex; flex-direction: column; gap: 14px; }
+.schedule-day-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.schedule-day-head b { font-size: 14px; }
+.schedule-day-head span { font-size: 12px; color: var(--muted); }
+.schedule-day-list { display: flex; flex-direction: column; gap: 6px; }
+
+.sch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+}
+.sch-item input[type='checkbox'] { flex: none; width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
+.sch-time { flex: none; font-size: 12px; font-family: var(--mono, monospace); color: var(--text-2); min-width: 34px; }
+.sch-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sch-badge {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border-radius: 6px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.sch-item .btn { flex: none; padding: 2px 7px; }
+.sch-item.done .sch-title { color: var(--muted); text-decoration: line-through; }
+.sch-item.done .sch-time { color: var(--muted); }
+.sch-item.overdue .sch-time { color: var(--error); font-weight: 600; }
+.sch-empty { font-size: 12px; color: var(--muted); padding: 6px 2px; }
+
+.schedule-upcoming .sch-up-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sch-up-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 6px 9px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.sch-up-time { flex: none; color: var(--primary); font-weight: 600; }
+.sch-up-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+
+/* 日程提醒气泡里的备注行（桌宠窗） */
+.pet-remind-note { opacity: 0.75; font-size: 12px; }

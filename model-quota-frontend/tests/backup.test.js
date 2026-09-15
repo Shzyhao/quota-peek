@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createRepository, memoryStorage, normalizeProviderConfig } from '../src/core/storage.js';
 import { createLogger } from '../src/core/logger.js';
 import { buildBackup, parseBackup, applyBackup } from '../src/core/backup.js';
+import { normalizeScheduleItem } from '../src/core/schedule.js';
 
 function repoWithData() {
   const repo = createRepository(memoryStorage());
@@ -10,6 +11,7 @@ function repoWithData() {
   );
   repo.saveLogs([{ id: 'l1', providerName: 'DeepSeek', time: '2026-09-02T10:00:00.000Z', status: 'ok', balance: 110, remainingQuota: 210, error: null }]);
   repo.saveSettings({ ...repo.loadSettings(), lowBalanceThreshold: 20 });
+  repo.saveSchedule(normalizeScheduleItem({ title: '周会', date: '2026-09-16', time: '15:00' }).item);
   return repo;
 }
 
@@ -25,6 +27,8 @@ describe('buildBackup', () => {
     expect(backup.providers[0].apiKey).toBe('sk-backup-key'); // 备份文件需要可恢复，保留密钥
     expect(backup.logs).toHaveLength(1);
     expect(backup.settings.lowBalanceThreshold).toBe(20);
+    expect(backup.schedules).toHaveLength(1);
+    expect(backup.schedules[0].title).toBe('周会');
   });
 });
 
@@ -58,12 +62,13 @@ describe('applyBackup', () => {
 
     const result = applyBackup(target, backup);
 
-    expect(result).toEqual({ providers: 1, logs: 1 });
+    expect(result).toEqual({ providers: 1, logs: 1, schedules: 1 });
     expect(target.listProviders().map((p) => p.name)).toEqual(['DeepSeek']);
     expect(target.getProvider(backup.providers[0].id).apiKey).toBe('sk-backup-key');
     expect(target.listLogs()).toHaveLength(1);
     expect(target.loadSettings().lowBalanceThreshold).toBe(20);
     expect(target.loadSettings().autoRefreshMinutes).toBe(0); // 缺省字段由默认值补齐
+    expect(target.listSchedules()).toHaveLength(1);
   });
 
   it('缺少 logs/settings 字段时安全降级', () => {
@@ -76,6 +81,7 @@ describe('applyBackup', () => {
     expect(target.listProviders()).toHaveLength(1);
     expect(target.listLogs()).toEqual([]);
     expect(target.loadSettings().lowBalanceThreshold).toBe(10);
+    expect(target.listSchedules()).toEqual([]); // 旧版备份无日程字段 → 覆盖为空
   });
 });
 

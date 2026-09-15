@@ -22,7 +22,7 @@ export function chatView() {
   return '<div class="chat-page" data-role="chat-root"></div>';
 }
 
-export function mountChatPage(el, { repo, voiceDeps } = {}) {
+export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
   let config = { profiles: [], activeProfileId: null, persona: '' };
   // 多会话：sessions 为最近活跃倒序列表，messages 始终是当前会话的消息视图；
   // 空存储播种一个初始会话（两个窗口共享 storage，只有先挂载者播种生效）
@@ -71,8 +71,9 @@ export function mountChatPage(el, { repo, voiceDeps } = {}) {
       <button class="btn" data-role="chat-session-new" title="新建会话">＋新对话</button>
       <button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>
       <select data-role="chat-profile" title="当前使用的模型配置"></select>
+      ${panel ? '' : `
       <button class="btn" data-role="chat-test">测试连接</button>
-      <button class="btn" data-role="chat-config-toggle">模型配置</button>
+      <button class="btn" data-role="chat-config-toggle">模型配置</button>`}
       <button class="btn danger" data-role="chat-clear" title="清空当前会话的聊天记录">清空记录</button>
     </div>
     <div class="chat-config" hidden>

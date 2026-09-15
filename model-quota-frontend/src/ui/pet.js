@@ -30,7 +30,20 @@ const PET_SCALE = 0.72;
 /// 气泡在回复完成后停留的时长
 const BUBBLE_LINGER_MS = 8000;
 
-const emitTauri = (event, payload) => globalThis.__TAURI__?.event?.emit?.(event, payload);
+  const emitTauri = (event, payload) => globalThis.__TAURI__?.event?.emit?.(event, payload);
+
+  // ——— 窗口布局命令串行队列 ———
+  // pet_menu_layout / pet_bubble_layout 都会改窗口尺寸与位置，气泡和菜单互切时
+  // 快速连发必须排队，避免两个命令交错执行把窗口尺寸/位置改乱
+  let layoutChain = Promise.resolve();
+  function queueLayout(cmd, expand, strip) {
+    const next = layoutChain.then(
+      () => globalThis.__TAURI__?.core?.invoke?.(cmd, { expand, strip }).catch(() => null),
+      () => null,
+    );
+    layoutChain = next.then(() => {}, () => {});
+    return next;
+  }
 
 export async function renderPet({ root, repo }) {
   document.documentElement.classList.add('pet-mode');
@@ -43,11 +56,44 @@ export async function renderPet({ root, repo }) {
   const bubble = root.querySelector('.pet-bubble');
   const menu = root.querySelector('.pet-menu');
 
-  // ——— 对话气泡（流式回复展示） ———
+  // ——— 对话气泡（流式回复展示）———
+  // 气泡显示时窗口经 pet_bubble_layout 向上/向下长出气泡条（人物原位不动、不遮挡）；
+  // 命令不可用时回退为窗内顶部覆盖（旧壳/异常环境）
 
   let bubbleTimer = null;
   let bubbleKind = null; // 当前气泡类型：status（对话状态）/ speak（告警播报）/ chatter（主动搭话）/ null（流式回复等）
   let streaming = false;
+  let bubbleCollapsePending = false; // 拖动时气泡内容先藏、窗口还原留到 mouseup（同菜单策略）
+  let lastBubbleStrip = 0; // 上次发给后端的气泡延伸高度（逻辑 px），高度不变就不重发
+
+  // 人物画布固有顶部留白（模型按窗口高 72% 缩放且底部对齐）≈ 62px：小气泡直接
+  // 悬在这段空白里，窗口不必长高；气泡超出留白才向上延伸，保证底边始终离头顶 ~10px。
+  // 上限 84 = 五行气泡（125px）需要延伸的部分；总高钳制与 Rust 侧一致
+  const BUBBLE_OVERLAP = 48;
+  const BUBBLE_GROW_MAX = 84;
+  function measureBubbleGrow() {
+    const h = Math.ceil(bubble.getBoundingClientRect().height);
+    return Math.min(BUBBLE_GROW_MAX, Math.max(0, h - BUBBLE_OVERLAP));
+  }
+
+  async function expandBubbleWindow(strip) {
+    const side = await queueLayout('pet_bubble_layout', true, strip);
+    if (side === 'up' || side === 'down') {
+      stage.classList.toggle('bubble-top', side === 'up');
+      stage.classList.toggle('bubble-bottom', side === 'down');
+      // 画布位移量 = 延伸高度（.bubble-top canvas 规则用这个变量），保证人物贴底不动
+      stage.style.setProperty('--bubble-strip', `${strip}px`);
+      lastBubbleStrip = strip;
+    }
+  }
+
+  function collapseBubbleWindow() {
+    bubbleCollapsePending = false;
+    lastBubbleStrip = 0;
+    if (!stage.classList.contains('bubble-top') && !stage.classList.contains('bubble-bottom')) return;
+    stage.classList.remove('bubble-top', 'bubble-bottom');
+    void queueLayout('pet_bubble_layout', false);
+  }
 
   function showBubble(html, { autoHide = true, lingerMs, tall = false, kind = null } = {}) {
     if (bubbleTimer) { clearTimeout(bubbleTimer); bubbleTimer = null; }
@@ -56,8 +102,16 @@ export async function renderPet({ root, repo }) {
     bubble.classList.toggle('tall', tall);
     bubble.innerHTML = html;
     bubble.hidden = false;
+    // 高度变化（含首显）才发命令：流式回复会连续重绘，避免每 token 都动窗口；
+    // 需要延伸才长窗口，小气泡直接浮在画布固有留白里
+    const grow = measureBubbleGrow();
+    if (grow > 0) {
+      if (grow !== lastBubbleStrip) void expandBubbleWindow(grow);
+    } else if (stage.classList.contains('bubble-top') || stage.classList.contains('bubble-bottom')) {
+      collapseBubbleWindow();
+    }
     if (autoHide) {
-      bubbleTimer = setTimeout(() => { bubble.hidden = true; bubbleKind = null; bubble.classList.remove('tall'); }, lingerMs || BUBBLE_LINGER_MS);
+      bubbleTimer = setTimeout(() => { bubble.hidden = true; bubbleKind = null; bubble.classList.remove('tall'); collapseBubbleWindow(); }, lingerMs || BUBBLE_LINGER_MS);
     }
   }
 
@@ -66,6 +120,7 @@ export async function renderPet({ root, repo }) {
     bubble.hidden = true;
     bubbleKind = null;
     bubble.classList.remove('tall');
+    collapseBubbleWindow();
   }
 
   // 气泡上点击 = 关闭
@@ -85,7 +140,7 @@ export async function renderPet({ root, repo }) {
   }
 
   async function expandMenuWindow() {
-    const side = await globalThis.__TAURI__?.core?.invoke?.('pet_menu_layout', { expand: true });
+    const side = await queueLayout('pet_menu_layout', true);
     menuSide = side === 'right' ? 'right' : 'left';
     setMenuSide(menuSide);
     menu.hidden = false;
@@ -96,23 +151,29 @@ export async function renderPet({ root, repo }) {
     if (!menuSide) return;
     menuSide = null;
     setMenuSide(null);
-    void globalThis.__TAURI__?.core?.invoke?.('pet_menu_layout', { expand: false }).catch(() => {});
+    void queueLayout('pet_menu_layout', false);
   }
 
   function renderMenu() {
     const customs = listCustomModels();
     const activeCustom = getActiveCustom();
+    // 关闭按钮在固定顶栏（不随列表滚动/不被条目压住），列表在 body 内自行滚动
     menu.innerHTML = `
-      <button class="pet-menu-close" data-menu="close" aria-label="关闭菜单">×</button>
-      <button data-menu="chat">💬 对话</button>
-      <button data-menu="voice">🎙 语音对话</button>
-      <button data-menu="analysis">📄 文件分析</button>
-      <button data-menu="quota">📊 额度速览</button>
-      <button data-menu="skins">👗 换装（下一套）</button>
-      ${customs.length ? `<div class="pet-skin-section">我的形象</div>
-      <div class="pet-skin-grid">
-        ${customs.map((c) => `<button data-custom="${escapeHtml(c.id)}" class="${activeCustom?.id === c.id ? 'cur' : ''}">${escapeHtml(c.name)}</button>`).join('')}
-      </div>` : ''}`;
+      <div class="pet-menu-head">
+        <button class="pet-menu-close" data-menu="close" aria-label="关闭菜单">×</button>
+      </div>
+      <div class="pet-menu-body">
+        <button data-menu="chat">💬 对话</button>
+        <button data-menu="voice">🎙 语音对话</button>
+        <button data-menu="analysis">📄 文件分析</button>
+        <button data-menu="schedule">📅 日程</button>
+        <button data-menu="quota">📊 额度速览</button>
+        <button data-menu="skins" title="循环切换到下一套皮肤">👗 换装</button>
+        ${customs.length ? `<div class="pet-skin-section">我的形象</div>
+        <div class="pet-skin-grid">
+          ${customs.map((c) => `<button data-custom="${escapeHtml(c.id)}" class="${activeCustom?.id === c.id ? 'cur' : ''}">${escapeHtml(c.name)}</button>`).join('')}
+        </div>` : ''}
+      </div>`;
   }
 
   function showMenu() {
@@ -156,7 +217,13 @@ export async function renderPet({ root, repo }) {
       playPetMotion();
     }
     else if (act === 'analysis') { hideMenu(); emitTauri('pet-panel', 'analysis'); }
-    else if (act === 'quota') { hideMenu(); emitTauri('ball-clicked'); }
+    else if (act === 'schedule') { hideMenu(); emitTauri('pet-panel', 'schedule'); }
+    else if (act === 'quota') {
+      hideMenu();
+      // 等菜单收起命令执行完再发（窗口位置回稳后 Rust 才锚定迷你窗）；
+      // 固定模式打开（pet-quota），不随鼠标移出收起
+      void layoutChain.then(() => emitTauri('pet-quota'));
+    }
   });
 
   // 菜单「换装」= 循环切换：自定义形象在用时先切回内置，否则切到下一套内置皮肤
@@ -264,11 +331,15 @@ export async function renderPet({ root, repo }) {
     if (Math.hypot(e.screenX - press.x, e.screenY - press.y) > 6) {
       dragged = true;
       press = null;
-      // 拖动时只收菜单面板：窗口保持展开（画布平移类保留，人物位置连续），
-      // 还原延迟到 mouseup——此时还原按当前位置右移补偿，拖到哪就停哪
+      // 拖动时只收菜单面板/藏气泡内容：窗口保持展开（位移类保留，人物位置连续），
+      // 还原延迟到 mouseup——此时还原按当前位置补偿，拖到哪就停哪
       if (menuSide) {
         menu.hidden = true;
         menuCollapsePending = true;
+      }
+      if (!bubble.hidden) {
+        bubble.hidden = true;
+        bubbleCollapsePending = true;
       }
       globalThis.__TAURI__?.window?.getCurrentWindow?.()?.startDragging?.();
     }
@@ -278,6 +349,9 @@ export async function renderPet({ root, repo }) {
     if (menuCollapsePending) {
       menuCollapsePending = false;
       collapseMenuWindow();
+    }
+    if (bubbleCollapsePending) {
+      collapseBubbleWindow();
     }
   });
 
@@ -290,6 +364,10 @@ export async function renderPet({ root, repo }) {
     // 拖动收起的窗口还原若被原生拖动吞掉 mouseup 而没执行，这里兜底
     if (menuCollapsePending) {
       collapseMenuWindow();
+      return;
+    }
+    if (bubbleCollapsePending) {
+      collapseBubbleWindow();
       return;
     }
     if (dragged) {
@@ -337,6 +415,27 @@ export async function renderPet({ root, repo }) {
     if (recoveries.length) {
       parts.push(`<b>${all.length ? '另外～' : '好消息！'}${recoveries.join('、')} 恢复正常啦 🎉</b>`);
     }
+    showBubble(parts.join('<br>'), { lingerMs: 15000, tall: true, kind: 'speak' });
+    playPetMotion();
+  });
+
+  // 日程到点提醒（后端调度线程判定，选择桌宠播报通道时 emit 到这里）：
+  // 气泡列出本批提醒（同时到点的合并展示）+ 随机小动作；missed = 应用休眠/
+  // 未运行期间错过的补报。payload: [{title, note, at(原定时刻ms), missed}]
+  void globalThis.__TAURI__?.event?.listen?.('schedule-due', (e) => {
+    const tasks = Array.isArray(e?.payload) ? e.payload : [];
+    if (!tasks.length) return;
+    const pad = (x) => String(x).padStart(2, '0');
+    const hm = (ms) => {
+      const d = new Date(ms);
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    const missed = tasks.some((t) => t?.missed);
+    const parts = [`<b>⏰ ${missed ? '错过的提醒' : '主人，到点啦！'}</b>`];
+    parts.push(...tasks.slice(0, 3).map((t) => `· ${hm(t.at)} ${escapeHtml(String(t.title || ''))}`));
+    if (tasks.length > 3) parts.push(`……还有 ${tasks.length - 3} 条，见主界面「日程」`);
+    const note = tasks.find((t) => t?.note)?.note;
+    if (note) parts.push(`<span class="pet-remind-note">${escapeHtml(String(note).slice(0, 40))}</span>`);
     showBubble(parts.join('<br>'), { lingerMs: 15000, tall: true, kind: 'speak' });
     playPetMotion();
   });

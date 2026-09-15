@@ -16,6 +16,7 @@ use liteai_model::OpenAiClient;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_notification::NotificationExt;
 
 /// 凭据管理器 service 名（与轻析的 com.liteai.analyzer 隔离）
 const KEYRING_SERVICE: &str = "com.modelquota.desktop";
@@ -906,4 +907,210 @@ pub fn update_tray_status(
         let _ = win.set_icon(tauri::image::Image::new_owned(rgba, width, height));
     }
     Ok(())
+}
+
+// ——— 日程提醒调度（时钟在 Rust 常驻线程）———
+// 前端把未来窗口内（7 天）的提醒实例同步过来（set_schedule_reminders，schedule.json
+// 持久化，重启恢复并补报错过项）；调度线程每 20s 扫描到期实例：桌宠窗开着且为 pet
+// 形态 → emit `schedule-due` 由桌宠气泡播报，否则回退 Windows 原生 Toast。
+// 与定时刷新同一套「后端持钟」设计，不受 WebView 隐藏窗口定时器节流影响。
+
+/// 到期后多久以内算「新鲜错过」→ 立即补报（带 missed 标记）；
+/// 超过 STALE（休眠跨夜、久未开机）静默吞掉，避免唤醒后提醒雪崩
+const REMINDER_FRESH_MS: i64 = 15 * 60 * 1000;
+const REMINDER_STALE_MS: i64 = 12 * 60 * 60 * 1000;
+/// 调度扫描周期
+const REMINDER_TICK_SECS: u64 = 20;
+
+/// 一条提醒实例（前端 expandInstances 把重复日程展开成的具体某一次）
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduleTask {
+    /// `id@dueAt`：已触发判定键（防重启/补发重复）
+    pub key: String,
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub note: String,
+    /// 提醒触发时刻（原定时刻 − 提前量，ms epoch）
+    pub due_at: i64,
+    /// 原定开始时刻（展示用，ms epoch）
+    pub at: i64,
+    /// 原定时刻的 HH:mm 文本（Rust 无本地时区库，前端格式化好带过来）
+    #[serde(default)]
+    pub time_text: String,
+}
+
+/// 调度共享状态：待触发队列 + 已触发键集合 + 变更序号（Condvar 唤醒重扫）
+#[derive(Default)]
+pub struct ReminderState {
+    pub tasks: Mutex<Vec<ScheduleTask>>,
+    pub fired: Mutex<std::collections::HashSet<String>>,
+    pub seq: Mutex<u64>,
+    pub cond: std::sync::Condvar,
+    /// 队列耗尽后补货请求（schedule-queue-low）只发一次，补货前不重复发
+    pub refill_requested: AtomicBool,
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn schedule_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("schedule.json"))
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct PersistedSchedule {
+    #[serde(default)]
+    tasks: Vec<ScheduleTask>,
+    #[serde(default)]
+    fired: Vec<String>,
+}
+
+/// 持久化队列与已触发集合（fired 只保留 48h 内的，防文件无限增长）
+fn persist_schedule(app: &AppHandle, state: &ReminderState) {
+    let Some(path) = schedule_path(app) else { return };
+    let now = now_ms();
+    let fired: Vec<String> = state
+        .fired
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|k| {
+            k.rsplit('@')
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+                .map(|t| now - t < 48 * 60 * 60 * 1000)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    let data = PersistedSchedule { tasks: state.tasks.lock().unwrap().clone(), fired };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let _ = std::fs::write(path, serde_json::to_string(&data).unwrap_or_default());
+}
+
+/// 启动时恢复持久化状态（错过项由调度线程首轮扫描判定补报）
+pub fn load_persisted_schedule(app: &AppHandle, state: &ReminderState) {
+    let Some(path) = schedule_path(app) else { return };
+    let Ok(raw) = std::fs::read_to_string(path) else { return };
+    let Ok(data) = serde_json::from_str::<PersistedSchedule>(&raw) else { return };
+    *state.tasks.lock().unwrap() = data.tasks;
+    *state.fired.lock().unwrap() = data.fired.into_iter().collect();
+}
+
+/// 前端同步提醒队列（启动 / 日程增删改 / 补货请求后都会调用）。
+/// 相同队列直接忽略：任意窗口在任意时机重发都幂等，不打断调度线程
+#[tauri::command]
+pub fn set_schedule_reminders(
+    app: AppHandle,
+    state: State<'_, std::sync::Arc<ReminderState>>,
+    tasks: Vec<ScheduleTask>,
+) -> Result<(), String> {
+    let mut tasks = tasks;
+    tasks.sort_by_key(|t| t.due_at);
+    tasks.truncate(500);
+    {
+        let cur = state.tasks.lock().unwrap();
+        let same = serde_json::to_string(&*cur)
+            .map(|cur_j| serde_json::to_string(&tasks).map(|new_j| new_j == cur_j).unwrap_or(false))
+            .unwrap_or(false);
+        if same {
+            return Ok(());
+        }
+    }
+    *state.tasks.lock().unwrap() = tasks;
+    *state.seq.lock().unwrap() += 1;
+    state.cond.notify_all();
+    state.refill_requested.store(false, Ordering::SeqCst);
+    persist_schedule(&app, &state);
+    Ok(())
+}
+
+/// 调度线程：扫描到期实例 → 桌宠气泡（schedule-due 事件，同批合并一条）或原生
+/// Toast；队列将空时发 schedule-queue-low 请主窗补货（前端展开重复实例，
+/// IPC 事件不受隐藏窗口节流）。启动首轮即处理上次运行错过的提醒。
+pub fn spawn_schedule_reminder(app: AppHandle, state: std::sync::Arc<ReminderState>) {
+    std::thread::spawn(move || loop {
+        let seq = *state.seq.lock().unwrap();
+        let now = now_ms();
+        let due: Vec<ScheduleTask> = {
+            let tasks = state.tasks.lock().unwrap();
+            let fired = state.fired.lock().unwrap();
+            tasks
+                .iter()
+                .filter(|t| t.due_at <= now && !fired.contains(&t.key))
+                .cloned()
+                .collect()
+        };
+        let pet_open = crate::pet_bubble_available(&app);
+        let mut pet_batch: Vec<serde_json::Value> = Vec::new();
+        let mut fired_now: Vec<String> = Vec::new();
+        for t in due {
+            let age = now - t.due_at;
+            let missed = age > REMINDER_FRESH_MS;
+            if age > REMINDER_STALE_MS {
+                // 太旧：静默标记已触发
+            } else if pet_open {
+                pet_batch.push(serde_json::json!({
+                    "key": t.key,
+                    "title": t.title,
+                    "note": t.note,
+                    "at": t.at,
+                    "missed": missed,
+                }));
+            } else {
+                let mut body = format!("{} {}", t.time_text, t.title);
+                if !t.note.is_empty() {
+                    body.push_str(&format!("（{}）", t.note));
+                }
+                if missed {
+                    body = format!("（已错过）{body}");
+                }
+                let result = app
+                    .notification()
+                    .builder()
+                    .title("桌看 · 日程提醒")
+                    .body(&body)
+                    .show();
+                // 诊断：Toast 静默失败（如裸 exe 无 AUMID）时落盘错误详情
+                if let Err(e) = result {
+                    if let Some(dir) = app.path().app_config_dir().ok() {
+                        let _ = std::fs::write(dir.join("notify-error.txt"), format!("{e:?}"));
+                    }
+                }
+            }
+            fired_now.push(t.key);
+        }
+        if !pet_batch.is_empty() {
+            let _ = app.emit("schedule-due", &pet_batch);
+        }
+        if !fired_now.is_empty() {
+            state.fired.lock().unwrap().extend(fired_now.iter().cloned());
+            persist_schedule(&app, &state);
+        }
+        // 队列将空：请主窗补货（只发一次，直到 set_schedule_reminders 复位标记）
+        let has_upcoming = {
+            let tasks = state.tasks.lock().unwrap();
+            let fired = state.fired.lock().unwrap();
+            tasks.iter().any(|t| t.due_at > now && !fired.contains(&t.key))
+        };
+        if has_upcoming {
+            state.refill_requested.store(false, Ordering::SeqCst);
+        } else if !state.refill_requested.swap(true, Ordering::SeqCst) {
+            let _ = app.emit("schedule-queue-low", ());
+        }
+        let guard = state.seq.lock().unwrap();
+        let _ = state.cond.wait_timeout_while(
+            guard,
+            std::time::Duration::from_secs(REMINDER_TICK_SECS),
+            |s| *s == seq,
+        );
+    });
 }

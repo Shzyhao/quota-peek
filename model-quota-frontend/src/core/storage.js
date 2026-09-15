@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
   providers: 'mqc.providers',
   logs: 'mqc.logs',
   settings: 'mqc.settings',
+  schedules: 'mqc.schedules',
 };
 
 // 内存存储实现：测试环境注入使用，也在 localStorage 不可用时兜底。
@@ -112,6 +113,30 @@ export function createRepository(storage = safeStorage()) {
       write(STORAGE_KEYS.providers, []);
       write(STORAGE_KEYS.logs, []);
       write(STORAGE_KEYS.settings, {});
+      write(STORAGE_KEYS.schedules, []);
+    },
+
+    // ——— 日程与待办（记录结构见 core/schedule.js 的 normalizeScheduleItem）———
+    listSchedules: () => read(STORAGE_KEYS.schedules, []),
+
+    saveSchedule(item) {
+      const list = read(STORAGE_KEYS.schedules, []);
+      const idx = list.findIndex((s) => s.id === item.id);
+      if (idx >= 0) list[idx] = item;
+      else list.push(item);
+      write(STORAGE_KEYS.schedules, list);
+      return item;
+    },
+
+    // 批量覆盖（备份导入用）
+    saveSchedules(list) {
+      write(STORAGE_KEYS.schedules, Array.isArray(list) ? list : []);
+      return list;
+    },
+
+    deleteSchedule(id) {
+      const list = read(STORAGE_KEYS.schedules, []).filter((s) => s.id !== id);
+      write(STORAGE_KEYS.schedules, list);
     },
 
     listLogs: () => read(STORAGE_KEYS.logs, []),
