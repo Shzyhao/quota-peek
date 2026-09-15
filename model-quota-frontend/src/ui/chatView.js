@@ -69,9 +69,9 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     <div class="chat-toolbar">
       <select data-role="chat-session" title="切换会话（保留最近 10 个）"></select>
       <button class="btn" data-role="chat-session-new" title="新建会话">＋新对话</button>
+      ${panel ? '' : `
       <button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>
       <select data-role="chat-profile" title="当前使用的模型配置"></select>
-      ${panel ? '' : `
       <button class="btn" data-role="chat-test">测试连接</button>
       <button class="btn" data-role="chat-config-toggle">模型配置</button>`}
       <button class="btn danger" data-role="chat-clear" title="清空当前会话的聊天记录">清空记录</button>
@@ -143,9 +143,11 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
 
   function renderToolbar() {
     const sel = $('[data-role="chat-profile"]');
-    sel.innerHTML = config.profiles.length
-      ? config.profiles.map((p) => `<option value="${escapeHtml(p.id)}" ${p.id === config.activeProfileId ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model)}</option>`).join('')
-      : '<option value="">（未配置模型）</option>';
+    if (sel) {
+      sel.innerHTML = config.profiles.length
+        ? config.profiles.map((p) => `<option value="${escapeHtml(p.id)}" ${p.id === config.activeProfileId ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model)}</option>`).join('')
+        : '<option value="">（未配置模型）</option>';
+    }
     const sessionSel = $('[data-role="chat-session"]');
     sessionSel.innerHTML = sessions.length
       ? sessions.map((s) => `<option value="${escapeHtml(s.id)}" ${s.id === activeId ? 'selected' : ''}>${escapeHtml(s.title)}</option>`).join('')
