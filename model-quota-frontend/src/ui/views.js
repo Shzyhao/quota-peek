@@ -19,6 +19,7 @@ const VIEW_TITLES = {
   schedule: '日程与待办',
   overview: '额度总览',
   chat: '对话',
+  models: '模型配置',
   sessions: '会话记录',
   analysis: '文件分析',
   providers: '供应商',

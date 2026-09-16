@@ -264,21 +264,21 @@ describe('额度供应商 → 对话模型联动', () => {
       id: 'prov-abc',
       name: 'DeepSeek 主账号',
       base_url: 'https://api.deepseek.com',
-      model: 'deepseek-chat',
+      models: ['deepseek-chat'],
     });
   });
 
-  it('供应商自定义的 Base URL 与 chatModel 优先生效', () => {
+  it('供应商自定义的 Base URL 与 chatModel 优先生效；chatModel 支持逗号/换行分隔多模型', () => {
     const prof = buildProfileFromProvider({
-      id: 'x', name: '中转站', type: 'openai', baseUrl: 'https://relay.example.com/v1/', chatModel: 'gpt-x',
+      id: 'x', name: '中转站', type: 'openai', baseUrl: 'https://relay.example.com/v1/', chatModel: 'gpt-x, gpt-y\ngpt-z，gpt-w',
     });
     expect(prof.base_url).toBe('https://relay.example.com/v1'); // 去尾部斜杠
-    expect(prof.model).toBe('gpt-x');
+    expect(prof.models).toEqual(['gpt-x', 'gpt-y', 'gpt-z', 'gpt-w']);
   });
 
-  it('custom 类型无默认模型时 model 为空串', () => {
+  it('custom 类型无默认模型时 models 为空数组', () => {
     const prof = buildProfileFromProvider({ id: 'c', name: '手动', type: 'custom', baseUrl: '', chatModel: '' });
-    expect(prof.model).toBe('');
+    expect(prof.models).toEqual([]);
     expect(prof.base_url).toBe('');
   });
 

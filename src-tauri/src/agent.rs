@@ -583,8 +583,8 @@ pub async fn agent_send(
     msgs.extend(messages);
     *agent.messages.lock().unwrap() = msgs;
 
-    let (profile, key) = crate::commands::active_profile_with_key(&chat)?;
-    let client = AgentClient::new(key, profile.base_url.clone(), profile.model.clone());
+    let (profile, key, model) = crate::commands::active_profile_with_key(&chat)?;
+    let client = AgentClient::new(key, profile.base_url.clone(), model);
 
     let result = run_loop(&app, &agent, &client, &on_event).await;
     // 挂起（存在待确认调用）时保持 running=true，由 agent_resolve 继续；其余情况复位
@@ -678,8 +678,8 @@ pub async fn agent_resolve(
         drop(msgs);
     }
 
-    let (profile, key) = crate::commands::active_profile_with_key(&chat)?;
-    let client = AgentClient::new(key, profile.base_url.clone(), profile.model.clone());
+    let (profile, key, model) = crate::commands::active_profile_with_key(&chat)?;
+    let client = AgentClient::new(key, profile.base_url.clone(), model);
 
     let result = run_loop(&app, &agent, &client, &on_event).await;
     if agent.pending.lock().unwrap().is_none() {

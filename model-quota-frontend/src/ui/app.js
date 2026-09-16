@@ -8,6 +8,7 @@ import { openProviderForm } from './form.js';
 import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
 import { chatView, mountChatPage } from './chatView.js';
+import { modelsView, mountModelsPage } from './modelsView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
 import { scheduleView, mountSchedulePage } from './scheduleView.js';
 import { sessionsView, mountSessionsPage } from './sessionsView.js';
@@ -19,6 +20,7 @@ const NAV_ITEMS = [
   { view: 'home', label: '首页', icon: 'M4 11l8-7 8 7M6 10v9h12v-9' },
   { view: 'schedule', label: '日程', icon: 'M8 3v4M16 3v4M4 9h16M5 5h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z' },
   { view: 'chat', label: '对话', icon: 'M4 4h16v12H8l-4 4z' },
+  { view: 'models', label: '模型配置', icon: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5' },
   { view: 'sessions', label: '会话记录', icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' },
   { view: 'analysis', label: '文件分析', icon: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13h6M9 17h4' },
   { view: 'overview', label: '额度总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
@@ -32,6 +34,7 @@ const VIEW_RENDERERS = {
   schedule: scheduleView,
   overview: overviewView,
   chat: chatView,
+  models: modelsView,
   sessions: sessionsView,
   analysis: analysisView,
   providers: providersView,
@@ -416,6 +419,9 @@ export function renderApp({ root, repo, logger, service }) {
     if (view === 'chat') {
       const chatRoot = content.querySelector('[data-role="chat-root"]');
       if (chatRoot) mountChatPage(chatRoot, { repo });
+    } else if (view === 'models') {
+      const modelsRoot = content.querySelector('[data-role="models-root"]');
+      if (modelsRoot) mountModelsPage(modelsRoot, { repo });
     } else if (view === 'analysis') {
       const analysisRoot = content.querySelector('[data-role="analysis-root"]');
       if (analysisRoot) mountAnalysisPage(analysisRoot);

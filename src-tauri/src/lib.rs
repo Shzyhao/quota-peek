@@ -586,7 +586,7 @@ pub fn run() {
             commands::chat_set_key,
             commands::chat_has_key,
             commands::chat_delete_key,
-            commands::chat_test_connection,
+            commands::chat_copy_key,
             commands::chat_send,
             commands::chat_cancel,
             commands::analyze_files,

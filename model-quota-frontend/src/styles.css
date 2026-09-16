@@ -1750,11 +1750,15 @@ select {
   color: var(--text-2);
 }
 
-.chat-profile-form input {
+.chat-profile-form input,
+.chat-profile-form textarea {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
+  font: inherit;
 }
+
+.chat-profile-form textarea { resize: vertical; }
 
 .chat-form-actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 
@@ -1844,6 +1848,78 @@ select {
 }
 
 .chat-input-actions { display: flex; gap: 8px; }
+
+/* 对话页轻提示条（语音/附件/未配模型等，替代旧配置面板内提示） */
+.chat-hint { margin: 0; min-height: 0; }
+
+/* 消息操作（复制 / 编辑重发）：常显但低调，hover 提亮；发送中断后仍可操作 */
+.chat-msg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 4px;
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+
+.chat-bubble:hover .chat-msg-actions { opacity: 1; }
+
+.chat-msg-act {
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: transparent;
+  cursor: pointer;
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: 4px;
+  color: inherit;
+}
+
+.chat-bubble.assistant .chat-msg-act { color: var(--muted); }
+.chat-bubble.user .chat-msg-act { border-color: rgba(255, 255, 255, 0.5); }
+.chat-msg-act:hover { background: rgba(127, 127, 127, 0.18); }
+.chat-msg-act.copied { color: var(--ok); border-color: var(--ok); }
+
+/* 编辑态用户消息：气泡内就地编辑，保存 = 截断其后历史并重发 */
+.chat-bubble.user.editing {
+  max-width: 88%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--primary);
+}
+
+.chat-bubble.editing textarea { resize: vertical; font: inherit; }
+
+.chat-msg-edit-actions { display: flex; gap: 8px; }
+.chat-msg-edit-actions .btn { height: 26px; padding: 0 10px; font-size: 12.5px; }
+
+/* ============ 模型配置页 ============ */
+.models-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-model-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.chat-model-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 11.5px;
+  font-family: Consolas, monospace;
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.chat-profile-url {
+  font-size: 12px;
+  color: var(--muted);
+  font-family: Consolas, monospace;
+}
 
 /* ============ 桌宠（#pet，无边框置顶透明窗 + Live2D 人物） ============ */
 /* 画布全透（桌面壳为透明窗口，人物外区域透出桌面），人物由 pet.js 内

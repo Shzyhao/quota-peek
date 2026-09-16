@@ -1,20 +1,18 @@
-// 主窗「对话」页：完整会话 + 模型配置管理（多套 profile / API Key 入凭据管理器 /
-// 人设编辑 / 连接测试）。自挂载组件（mountChatPage 由 app.js 在渲染后调用），
+// 主窗「对话」页：完整会话 + 模型下拉切换（多供应商 × 多模型）+ 消息复制/编辑重发。
+// 模型与语音的增删改在「模型配置」页（modelsView），本页只做选择与使用；
 // 流式逻辑与存储复用 core/chat.js，与桌宠窗气泡共用同一后端命令。
+// 自挂载组件（mountChatPage 由 app.js 在渲染后调用）。
 
 import {
-  loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession, newSession,
+  loadSessions, saveSessions, appendToSession, deleteSession, newSession,
   buildQuotaContext, buildOutgoingMessages, attachmentsToText,
-  buildProfileFromProvider, importableProviders,
-  isChatAvailable, getChatConfig, saveChatConfig, setChatKey, hasChatKey,
-  deleteChatKey, testChatConnection, sendChat, cancelChat,
-  readChatFile, agentSend, agentResolve, cancelAgent, isReadonlyTool,
+  isChatAvailable, getChatConfig, saveChatConfig,
+  sendChat, cancelChat, readChatFile, agentSend, agentResolve, cancelAgent, isReadonlyTool,
 } from '../core/chat.js';
-import { readSecret } from '../core/secrets.js';
+import { listModelChoices, resolveActiveSelection, selectionValue, parseSelectionValue } from '../core/models.js';
 import {
   loadVoiceConfig, saveVoiceConfig, isVoiceConfigured,
-  hasVoiceKey, setVoiceKey, deleteVoiceKey,
-  createVoiceRecorder, transcribeAudio, speakText, stopSpeaking, speechFriendlyText,
+  hasVoiceKey, createVoiceRecorder, transcribeAudio, speakText, stopSpeaking, speechFriendlyText,
 } from '../core/voice.js';
 import { escapeHtml } from './format.js';
 
@@ -23,7 +21,8 @@ export function chatView() {
 }
 
 export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
-  let config = { profiles: [], activeProfileId: null, persona: '' };
+  // persona 由「模型配置」页维护，这里只读回填（persist 时原样带回，避免互相覆盖）
+  let config = { profiles: [], activeProfileId: null, activeModel: null, persona: '' };
   // 多会话：sessions 为最近活跃倒序列表，messages 始终是当前会话的消息视图；
   // 空存储播种一个初始会话（两个窗口共享 storage，只有先挂载者播种生效）
   let loaded = loadSessions();
@@ -39,16 +38,15 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
   let agentRunning = false;
   let agentLive = [];   // 运行中的工具卡片（挂起的提议/已执行结果），不入会话
   let agentHandlers = null;
-  // 编辑中的 profile（null = 新建未开始；{...profile, key} = 编辑/新建表单内容）
-  let editing = null;
-  let testResult = '';
+  // 编辑中的用户消息（messages 数组下标；null = 不在编辑）
+  let editingMsg = null;
+  let hint = '';
   // 语音对话：麦克风状态机 idle→recording→transcribing；朗读播放标记；
   // 录音器懒创建（首次点麦克风才申请 getUserMedia，避免挂载即碰媒体设备）
   let voiceConfig = loadVoiceConfig();
   let voiceRecorder = null;
   let voiceState = 'idle';
   let voicePlaying = false;
-  let voiceKeySet = false;
 
   // Agent 模式默认开启、只读工具自动批准默认开启——开关在主窗「设置 · 对话 Agent」，
   // 实时读 localStorage：设置页改动即时对所有对话窗口生效（聊天面板无按钮）
@@ -70,59 +68,10 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     <div class="chat-toolbar">
       <select data-role="chat-session" title="切换会话（保留最近 10 个）"></select>
       <button class="btn" data-role="chat-session-new" title="新建会话">＋新对话</button>
-      ${panel ? '' : `
-      <button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>
-      <select data-role="chat-profile" title="当前使用的模型配置"></select>
-      <button class="btn" data-role="chat-test">测试连接</button>
-      <button class="btn" data-role="chat-config-toggle">模型配置</button>`}
-      <button class="btn danger" data-role="chat-clear" title="清空当前会话的聊天记录">清空记录</button>
+      ${panel ? '' : `<button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>`}
+      <select data-role="chat-profile" title="当前使用的模型（供应商与模型在主窗「模型配置」页管理）"></select>
     </div>
-    ${panel ? '' : `
-    <div class="chat-config" hidden>
-      <div data-role="chat-profiles"></div>
-      <div class="chat-import">
-        <div class="chat-import-head">
-          <b>从额度供应商导入</b>
-          <span class="settings-hint">把额度查询里配好的供应商一键变成对话模型（需 OpenAI 兼容接口；火山方舟 IAM 类型不适用），密钥同步写入凭据管理器。模型可在供应商表单的「AI 默认模型」里改。</span>
-        </div>
-        <div data-role="chat-import-list"></div>
-      </div>
-      <div class="chat-profile-form" hidden>
-        <h4 data-role="chat-form-title">添加配置</h4>
-        <label>名称<input data-field="name" placeholder="如 DeepSeek"></label>
-        <label>Base URL<input data-field="base_url" placeholder="如 https://api.deepseek.com"></label>
-        <label>模型<input data-field="model" placeholder="如 deepseek-chat"></label>
-        <label>API Key<input data-field="key" type="password" placeholder="存入 Windows 凭据管理器，不留本地文件"></label>
-        <div class="chat-form-actions">
-          <button class="btn" data-role="chat-profile-save">保存</button>
-          <button class="btn" data-role="chat-profile-cancel">取消</button>
-        </div>
-      </div>
-      <label class="chat-persona-label">桌宠人设（system 提示词，留空用内置默认）
-        <textarea data-role="chat-persona" rows="3" placeholder="例：你是一只傲娇的猫娘桌宠…"></textarea>
-      </label>
-      <button class="btn" data-role="chat-persona-save">保存人设</button>
-      <div class="chat-voice-config">
-        <div class="chat-import-head">
-          <b>语音服务（OpenAI 兼容语音端点）<span class="chat-key-state ${voiceKeySet ? 'ok' : 'missing'}" data-role="chat-voice-key-state"></span></b>
-          <span class="settings-hint">语音输入与回复朗读共用一套服务，默认预置硅基流动（识别 SenseVoiceSmall 免费、合成 CosyVoice2 近零成本），换其他 OpenAI 兼容服务改地址和模型即可。</span>
-        </div>
-        <div class="chat-voice-grid">
-          <label>识别 Base URL<input data-field="voice-asr-base" placeholder="https://api.siliconflow.cn/v1"></label>
-          <label>识别模型<input data-field="voice-asr-model" placeholder="FunAudioLLM/SenseVoiceSmall"></label>
-          <label>合成 Base URL<input data-field="voice-tts-base" placeholder="https://api.siliconflow.cn/v1"></label>
-          <label>合成模型<input data-field="voice-tts-model" placeholder="FunAudioLLM/CosyVoice2-0.5B"></label>
-          <label>音色<input data-field="voice-tts-voice" placeholder="FunAudioLLM/CosyVoice2-0.5B:anna"></label>
-          <label>API Key<input data-field="voice-key" type="password" placeholder="存入 Windows 凭据管理器（留空 = 不修改）"></label>
-        </div>
-        <div class="chat-form-actions">
-          <button class="btn" data-role="chat-voice-save">保存语音设置</button>
-          <button class="btn" data-role="chat-voice-test" title="合成一句固定台词试听音色">🔊 试听</button>
-          <button class="btn danger" data-role="chat-voice-key-del" hidden>删除 Key</button>
-        </div>
-      </div>
-      <p class="settings-hint" data-role="chat-test-result"></p>
-    </div>`}
+    <p class="settings-hint chat-hint" data-role="chat-hint" hidden></p>
     <div class="chat-messages" data-role="chat-messages"></div>
     <div class="chat-attachments" data-role="chat-attachments" hidden></div>
     <div class="chat-input">
@@ -142,11 +91,15 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
   // ——— 渲染 ———
 
   function renderToolbar() {
+    // 模型下拉：供应商 × 预设模型 展平（自由切换）；无配置时引导去「模型配置」页
     const sel = $('[data-role="chat-profile"]');
     if (sel) {
-      sel.innerHTML = config.profiles.length
-        ? config.profiles.map((p) => `<option value="${escapeHtml(p.id)}" ${p.id === config.activeProfileId ? 'selected' : ''}>${escapeHtml(p.name)} · ${escapeHtml(p.model)}</option>`).join('')
-        : '<option value="">（未配置模型）</option>';
+      const choices = listModelChoices(config.profiles);
+      const active = resolveActiveSelection(config);
+      const activeVal = active.profileId ? selectionValue(active.profileId, active.model) : '';
+      sel.innerHTML = choices.length
+        ? choices.map((c) => `<option value="${escapeHtml(selectionValue(c.profileId, c.model))}" ${selectionValue(c.profileId, c.model) === activeVal ? 'selected' : ''}>${escapeHtml(c.label)}</option>`).join('')
+        : '<option value="">（未配置模型：去主窗「模型配置」页添加）</option>';
     }
     const sessionSel = $('[data-role="chat-session"]');
     sessionSel.innerHTML = sessions.length
@@ -154,34 +107,9 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
       : '<option value="">（无会话）</option>';
   }
 
-  async function renderProfileList() {
-    const box = $('[data-role="chat-profiles"]');
-    if (!box) return;
-    const items = await Promise.all(config.profiles.map(async (p) => {
-      const hasKey = await hasChatKey(p.id).catch(() => false);
-      const active = p.id === config.activeProfileId;
-      return `
-        <div class="chat-profile-item ${active ? 'active' : ''}">
-          <div class="chat-profile-info">
-            <b>${escapeHtml(p.name)}</b>
-            <span>${escapeHtml(p.model)}</span>
-            <span class="chat-key-state ${hasKey ? 'ok' : 'missing'}">${hasKey ? '✓ 密钥已存' : '✗ 未设密钥'}</span>
-          </div>
-          <div class="chat-profile-actions">
-            ${active ? '' : `<button class="btn" data-role="chat-profile-use" data-id="${escapeHtml(p.id)}">设为当前</button>`}
-            <button class="btn" data-role="chat-profile-edit" data-id="${escapeHtml(p.id)}">编辑</button>
-            <button class="btn danger" data-role="chat-profile-del" data-id="${escapeHtml(p.id)}">删除</button>
-          </div>
-        </div>`;
-    }));
-    box.innerHTML = `
-      ${items.join('') || '<p class="settings-hint">还没有模型配置。添加一套 OpenAI 兼容配置（DeepSeek / Kimi / GLM 等）即可开始对话。</p>'}
-      <button class="btn" data-role="chat-add-profile">+ 添加配置</button>`;
-  }
-
   function renderMessages() {
     const box = $('[data-role="chat-messages"]');
-    const html = messages.map((m) => bubbleHtml(m));
+    const html = messages.map((m, idx) => bubbleHtml(m, idx));
     for (const c of agentLive) {
       if (c.kind === 'proposed' && !c.done) html.push(proposedCardHtml(c));
     }
@@ -190,7 +118,7 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     box.scrollTop = box.scrollHeight;
   }
 
-  function bubbleHtml(m) {
+  function bubbleHtml(m, idx) {
     if (m.tool) {
       const t = m.tool;
       return `<div class="chat-tool-card${t.ok ? '' : ' fail'}${t.danger ? ' danger' : ''}">
@@ -199,10 +127,26 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
       </div>`;
     }
     const cls = m.role === 'user' ? 'user' : 'assistant';
+    // 编辑态：该条用户消息变为编辑框（保存 = 截断其后历史并重发）
+    if (m.role === 'user' && editingMsg === idx) {
+      return `<div class="chat-bubble user editing">
+        <textarea data-role="msg-edit-box" rows="3">${escapeHtml(m.content)}</textarea>
+        <div class="chat-msg-edit-actions">
+          <button class="btn primary" data-role="msg-edit-save" data-id="${idx}" title="丢弃这条之后的历史，用新内容重新发送">保存并重发</button>
+          <button class="btn" data-role="msg-edit-cancel">取消</button>
+        </div>
+      </div>`;
+    }
     const att = m.attachments?.length
       ? `<div class="chat-attach-list">${m.attachments.map((a) => `<span class="chat-attach-chip">📄 ${escapeHtml(a.name)}</span>`).join('')}</div>`
       : '';
-    return `<div class="chat-bubble ${cls}${m.error ? ' error' : ''}">${att}<span class="chat-text">${escapeHtml(m.content)}</span></div>`;
+    // 消息操作：复制常显；编辑仅用户消息且非流式（发送中断后即可编辑补发）
+    const actions = `
+      <div class="chat-msg-actions">
+        <button class="chat-msg-act" data-role="msg-copy" data-id="${idx}" title="复制文本">⧉</button>
+        ${m.role === 'user' && !streaming ? `<button class="chat-msg-act" data-role="msg-edit" data-id="${idx}" title="编辑并重发">✎</button>` : ''}
+      </div>`;
+    return `<div class="chat-bubble ${cls}${m.error ? ' error' : ''}">${att}<span class="chat-text">${escapeHtml(m.content)}</span>${actions}</div>`;
   }
 
   // 挂起中的工具提议卡（批准/拒绝）
@@ -231,42 +175,21 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
       .join('');
   }
 
-  async function renderImportList() {
-    const box = $('[data-role="chat-import-list"]');
-    if (!box) return;
-    const providers = importableProviders(repo.listProviders());
-    const items = providers.map((p) => {
-      const prof = buildProfileFromProvider(p);
-      const imported = config.profiles.some((x) => x.id === prof.id);
-      const ready = !!(prof.model && prof.base_url);
-      return `
-        <div class="chat-import-item">
-          <span class="chat-import-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
-          <span class="chat-import-model" title="${escapeHtml(prof.model)}">${escapeHtml(prof.model || '未设模型')}</span>
-          <button class="btn ${imported ? '' : 'primary'}" data-role="chat-import" data-id="${escapeHtml(p.id)}" ${ready ? '' : 'disabled'} title="${ready ? '' : '请在供应商表单补全 Base URL / AI 默认模型'}">${imported ? '同步' : '导入'}</button>
-        </div>`;
-    });
-    box.innerHTML = items.join('') || '<p class="settings-hint">暂无可导入的供应商（先在「供应商」页添加）。</p>';
-  }
-
   function renderAll() {
     renderToolbar();
-    void renderProfileList();
-    void renderImportList();
     renderMessages();
     renderAttachments();
-    const persona = $('[data-role="chat-persona"]');
-    if (persona) persona.value = config.persona || '';
   }
 
   // ——— 配置读写 ———
 
   async function reloadConfig() {
     const cfg = await getChatConfig();
-    // Rust 侧 serde 字段名与这里对齐：profiles / active_profile_id / persona
+    // Rust 侧 serde 字段名与这里对齐：profiles / active_profile_id / active_model / persona
     config = {
       profiles: cfg.profiles || [],
       activeProfileId: cfg.active_profile_id ?? null,
+      activeModel: cfg.active_model ?? null,
       persona: cfg.persona || '',
     };
     renderAll();
@@ -276,6 +199,7 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     await saveChatConfig({
       profiles: config.profiles,
       active_profile_id: config.activeProfileId,
+      active_model: config.activeModel,
       persona: config.persona,
     });
   }
@@ -295,6 +219,14 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     syncMessages();
   }
 
+  // 整表替换当前会话消息（编辑重发截断用）：同样先重读再改，防跨窗覆盖
+  function replaceActiveMessages(next) {
+    const fresh = loadSessions();
+    const list = fresh.sessions.map((s) => (s.id === activeId ? { ...s, messages: next, updatedAt: Date.now() } : s));
+    ({ sessions, activeId } = saveSessions(list, activeId));
+    syncMessages();
+  }
+
   function setStreaming(on) {
     streaming = on;
     $('[data-role="chat-send"]').hidden = on;
@@ -302,10 +234,11 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     renderMessages();
   }
 
-  async function doSend(text) {
-    if (streaming || !text.trim()) return;
-    const profile = config.profiles.find((p) => p.id === config.activeProfileId);
-    if (!profile) { testResult = '请先在「模型配置」中添加并启用一套配置'; showTestResult(); return; }
+  // 发送一轮对话：调用前保证用户消息已入会话且为 messages 最后一条
+  // （doSend 追加新消息；编辑重发则先截断改写历史），两种入口共用本函数
+  async function runExchange(text, pendingAttachments) {
+    const hasProfile = config.profiles.some((p) => p.id === config.activeProfileId);
+    if (!hasProfile) { hint = '还没有可用模型：请到主窗「模型配置」页添加供应商'; showHint(); return; }
 
     // 新消息打断上一条朗读（简易打断）；录音中不可能走到这里（麦克风入口已挡）
     stopSpeaking();
@@ -313,16 +246,6 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     renderMic();
 
     emitChatStatus('thinking');
-    const pendingAttachments = attachments;
-    attachments = [];
-    renderAttachments();
-    appendToActiveSession({
-      role: 'user',
-      content: text,
-      attachments: pendingAttachments.length ? pendingAttachments : undefined,
-      time: Date.now(),
-    });
-    setStreaming(true);
     const quotaCtx = buildQuotaContext(repo.listProviders());
     const outgoing = buildOutgoingMessages([...messages.slice(0, -1)], quotaCtx);
     outgoing.push({
@@ -355,6 +278,62 @@ ${attachmentsToText(pendingAttachments)}` : text,
       onError: (msg) => finishExchange(reply || `（请求失败：${msg}）`, true),
       onCancelled: () => finishExchange(reply || '（已停止）', false),
     });
+  }
+
+  async function doSend(text) {
+    if (streaming || !text.trim()) return;
+    const pendingAttachments = attachments;
+    attachments = [];
+    renderAttachments();
+    appendToActiveSession({
+      role: 'user',
+      content: text,
+      attachments: pendingAttachments.length ? pendingAttachments : undefined,
+      time: Date.now(),
+    });
+    setStreaming(true);
+    await runExchange(text, pendingAttachments);
+  }
+
+  // ——— 消息编辑重发 / 复制（发送中断后对已有消息仍可用） ———
+
+  async function resendEdited(idx) {
+    const box = $('[data-role="msg-edit-box"]');
+    const text = (box?.value || '').trim();
+    const m = messages[idx];
+    if (!m || m.role !== 'user') return;
+    if (!text) { hint = '内容不能为空'; showHint(); return; }
+    editingMsg = null;
+    // 截断：保留这条之前的历史 + 改写后的这条；其后消息（含中断残留的失败回复）丢弃
+    const kept = [...messages.slice(0, idx), { ...m, content: text, time: Date.now() }];
+    replaceActiveMessages(kept);
+    setStreaming(true);
+    await runExchange(text, m.attachments || []);
+  }
+
+  async function copyMessageText(text, btn) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // WebView 剪贴板 API 不可用时回退 execCommand
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;opacity:0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        ta.remove();
+      }
+      btn.textContent = '✓';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = '⧉';
+        btn.classList.remove('copied');
+      }, 1200);
+    } catch {
+      hint = '复制失败：剪贴板不可用'; showHint();
+    }
   }
 
   // ——— Agent（单步确认式工具循环）———
@@ -404,12 +383,11 @@ ${attachmentsToText(pendingAttachments)}` : text,
     if (!error && reply && loadVoiceConfig().autoRead) void speakReply(reply);
   }
 
-  function showTestResult() {
-    const el2 = $('[data-role="chat-test-result"]');
-    if (el2) el2.textContent = testResult;
-    if (testResult) {
-      const cfgPanel = $('.chat-config');
-      if (cfgPanel.hidden) cfgPanel.hidden = false;
+  function showHint() {
+    const node = $('[data-role="chat-hint"]');
+    if (node) {
+      node.textContent = hint;
+      node.hidden = !hint;
     }
   }
 
@@ -421,23 +399,6 @@ ${attachmentsToText(pendingAttachments)}` : text,
     mic.classList.toggle('recording', voiceState === 'recording');
     mic.classList.toggle('busy', voiceState === 'transcribing' || voicePlaying);
     mic.textContent = voiceState === 'recording' ? '⏹' : voiceState === 'transcribing' ? '⏳' : '🎙';
-  }
-
-  async function refreshVoiceKeyState() {
-    try {
-      const has = await hasVoiceKey();
-      voiceKeySet = !!has;
-      const el2 = $('[data-role="chat-voice-key-state"]');
-      if (el2) {
-        el2.textContent = has ? '✓ Key 已存' : '✗ 未设 Key';
-        el2.classList.toggle('ok', has);
-        el2.classList.toggle('missing', !has);
-      }
-      const del = $('[data-role="chat-voice-key-del"]');
-      if (del) del.hidden = !has;
-    } catch {
-      /* 桌面壳不可用（如测试环境），静态占位即可 */
-    }
   }
 
   function micErrorHint(e) {
@@ -459,8 +420,8 @@ ${attachmentsToText(pendingAttachments)}` : text,
     renderMic();
     const hasKey = await hasVoiceKey().catch(() => false);
     if (!isVoiceConfigured(loadVoiceConfig(), hasKey)) {
-      testResult = '语音服务还没配置好：请展开「模型配置」，在「语音服务」卡里保存设置并填入 API Key';
-      showTestResult();
+      hint = '语音服务还没配置好：请在主窗「模型配置」页的「语音服务」里保存设置并填入 API Key';
+      showHint();
       return;
     }
     voiceRecorder = voiceRecorder || createVoiceRecorder(voiceDeps);
@@ -468,8 +429,8 @@ ${attachmentsToText(pendingAttachments)}` : text,
       await voiceRecorder.start({ onAutoStop: () => finishRecording() });
     } catch (e) {
       voiceRecorder = null;
-      testResult = micErrorHint(e);
-      showTestResult();
+      hint = micErrorHint(e);
+      showHint();
       return;
     }
     voiceState = 'recording';
@@ -486,8 +447,8 @@ ${attachmentsToText(pendingAttachments)}` : text,
     emitChatStatus('idle');
     if (!result) return;
     if (result.durationMs < 400) {
-      testResult = '录音太短啦，点住感觉再说一句话的功夫';
-      showTestResult();
+      hint = '录音太短啦，点住感觉再说一句话的功夫';
+      showHint();
       return;
     }
     voiceState = 'transcribing';
@@ -499,12 +460,12 @@ ${attachmentsToText(pendingAttachments)}` : text,
         voiceState = 'idle';
         renderMic();
         emitChatStatus('idle');
-        if (!text) { testResult = '没听清你说什么，再试一次？'; showTestResult(); return; }
+        if (!text) { hint = '没听清你说什么，再试一次？'; showHint(); return; }
         const input = $('[data-role="chat-input"]');
         input.value = text;
         if (streaming) {
-          testResult = '正在回复上一条，识别文字已填入输入框';
-          showTestResult();
+          hint = '正在回复上一条，识别文字已填入输入框';
+          showHint();
           return;
         }
         input.value = '';
@@ -513,8 +474,8 @@ ${attachmentsToText(pendingAttachments)}` : text,
         voiceState = 'idle';
         renderMic();
         emitChatStatus('idle');
-        testResult = `识别失败：${String(e?.message || e)}`;
-        showTestResult();
+        hint = `识别失败：${String(e?.message || e)}`;
+        showHint();
       }
     })();
   }
@@ -561,13 +522,13 @@ ${attachmentsToText(pendingAttachments)}` : text,
       if (!selected) return;
       const list = Array.isArray(selected) ? selected : [selected];
       for (const path of list) {
-        if (attachments.length >= 4) { testResult = '一条消息最多附加 4 个文件'; showTestResult(); break; }
+        if (attachments.length >= 4) { hint = '一条消息最多附加 4 个文件'; showHint(); break; }
         try {
           const att = await readChatFile(path);
           if (att) attachments.push(att);
-        } catch (e) {
-          testResult = String(e?.message || e);
-          showTestResult();
+        } catch (err) {
+          hint = String(err?.message || err);
+          showHint();
         }
       }
       renderAttachments();
@@ -581,55 +542,25 @@ ${attachmentsToText(pendingAttachments)}` : text,
       btn.classList.toggle('active', voiceConfig.autoRead);
       // 关朗读顺手停掉正在播的语音
       if (!voiceConfig.autoRead) { stopSpeaking(); voicePlaying = false; renderMic(); }
-    } else if (role === 'chat-voice-save') {
-      const cfg = {
-        asrBaseUrl: $('[data-field="voice-asr-base"]').value.trim().replace(/\/+$/, ''),
-        asrModel: $('[data-field="voice-asr-model"]').value.trim(),
-        ttsBaseUrl: $('[data-field="voice-tts-base"]').value.trim().replace(/\/+$/, ''),
-        ttsModel: $('[data-field="voice-tts-model"]').value.trim(),
-        ttsVoice: $('[data-field="voice-tts-voice"]').value.trim(),
-      };
-      if (!cfg.asrBaseUrl || !cfg.asrModel || !cfg.ttsBaseUrl || !cfg.ttsModel || !cfg.ttsVoice) {
-        testResult = '识别/合成的 Base URL、模型和音色都不能为空';
-        showTestResult();
-        return;
-      }
-      const key = $('[data-field="voice-key"]').value.trim();
-      if (key) await setVoiceKey(key);
-      voiceConfig = saveVoiceConfig(cfg);
-      $('[data-field="voice-key"]').value = '';
-      void refreshVoiceKeyState();
-      testResult = key ? '语音设置已保存，Key 已写入凭据管理器' : '语音设置已保存';
-      showTestResult();
-    } else if (role === 'chat-voice-test') {
-      const hasKey = await hasVoiceKey().catch(() => false);
-      if (!isVoiceConfigured(loadVoiceConfig(), hasKey)) {
-        testResult = '请先保存语音设置并填入 API Key，再试听';
-        showTestResult();
-        return;
-      }
-      testResult = '合成试听中…'; showTestResult();
-      try {
-        const reason = await speakText('你好呀主人，我是你的桌宠，语音服务一切正常！', loadVoiceConfig());
-        testResult = reason === 'ended' ? '✓ 试听播放完成' : reason === 'stopped' ? '试听已打断' : '✗ 音频播放失败';
-      } catch (e) {
-        testResult = `✗ ${String(e?.message || e)}`;
-      }
-      showTestResult();
-    } else if (role === 'chat-voice-key-del') {
-      await deleteVoiceKey().catch(() => {});
-      await refreshVoiceKeyState();
-      testResult = '语音 Key 已删除';
-      showTestResult();
+    } else if (role === 'msg-copy') {
+      const m = messages[Number(id)];
+      if (m) await copyMessageText(m.content || '', btn);
+    } else if (role === 'msg-edit') {
+      if (streaming) return;
+      editingMsg = Number(id);
+      renderMessages();
+      const box = $('[data-role="msg-edit-box"]');
+      if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    } else if (role === 'msg-edit-save') {
+      await resendEdited(Number(id));
+    } else if (role === 'msg-edit-cancel') {
+      editingMsg = null;
+      renderMessages();
     } else if (role === 'agent-approve' || role === 'agent-deny' || role === 'agent-chain') {
       if (!agentRunning || !agentHandlers) return;
       el.querySelectorAll('.chat-tool-actions button').forEach((b) => (b.disabled = true));
       if (role === 'agent-chain') chainApproved = true;
       await agentResolve(role !== 'agent-deny', agentHandlers, { approveChain: role === 'agent-chain' });
-    } else if (role === 'chat-clear') {
-      ({ sessions, activeId } = clearActiveMessages(sessions, activeId));
-      syncMessages();
-      renderAll();
     } else if (role === 'chat-session-new') {
       if (streaming) return;
       const fresh = newSession();
@@ -641,70 +572,6 @@ ${attachmentsToText(pendingAttachments)}` : text,
       ({ sessions, activeId } = deleteSession(sessions, activeId, activeId));
       syncMessages();
       renderAll();
-    } else if (role === 'chat-test') {
-      testResult = '测试中…'; showTestResult();
-      const r = await testChatConnection().catch((err) => ({ ok: false, message: String(err?.message || err) }));
-      testResult = `${r.ok ? '✓' : '✗'} ${r.message || ''}${r.balance ? `（余额 ${r.balance}）` : ''}`;
-      showTestResult();
-    } else if (role === 'chat-config-toggle') {
-      const panel = $('.chat-config');
-      panel.hidden = !panel.hidden;
-    } else if (role === 'chat-add-profile') {
-      editing = { id: null, name: '', base_url: '', model: '', key: '' };
-      showProfileForm('添加配置');
-    } else if (role === 'chat-profile-edit') {
-      const p = config.profiles.find((x) => x.id === id);
-      if (p) { editing = { ...p, key: '' }; showProfileForm(`编辑：${p.name}（Key 留空 = 不修改）`); }
-    } else if (role === 'chat-profile-use') {
-      config.activeProfileId = id;
-      await persistConfig();
-      renderAll();
-    } else if (role === 'chat-import') {
-      // 从额度供应商导入/同步：profile 稳定 id 覆盖 = 同步；密钥随导入写入凭据管理器
-      testResult = '';
-      const p = repo.getProvider(id);
-      if (!p) return;
-      const prof = buildProfileFromProvider(p);
-      if (!prof.model || !prof.base_url) {
-        testResult = `「${p.name}」缺少 Base URL 或默认模型：请在供应商表单填写 Base URL 与「AI 默认模型」`;
-        showTestResult();
-        return;
-      }
-      config.profiles = config.profiles.filter((x) => x.id !== prof.id);
-      config.profiles.push(prof);
-      if (!config.activeProfileId) config.activeProfileId = prof.id;
-      // 密钥随导入写入对话凭据管理器：桌面版从额度密钥条目读（记录只有标记），浏览器版读记录明文
-      let importKey = p.apiKey || '';
-      if (!importKey && p.hasSecret) {
-        const s = await readSecret(p.id).catch(() => null);
-        importKey = s?.apiKey || '';
-      }
-      if (importKey) {
-        await setChatKey(prof.id, importKey);
-      } else if (!(await hasChatKey(prof.id).catch(() => false))) {
-        testResult = `「${p.name}」未存 API Key，导入后无法调用：请在供应商表单补 Key 后再同步`;
-        showTestResult();
-      }
-      config.activeProfileId = prof.id;
-      await persistConfig();
-      if (!testResult) testResult = `已导入并启用：${p.name} · ${prof.model}`;
-      renderAll();
-      showTestResult();
-    } else if (role === 'chat-profile-del') {
-      config.profiles = config.profiles.filter((x) => x.id !== id);
-      if (config.activeProfileId === id) config.activeProfileId = config.profiles[0]?.id ?? null;
-      await deleteChatKey(id).catch(() => {});
-      await persistConfig();
-      renderAll();
-    } else if (role === 'chat-profile-save') {
-      await saveProfileForm();
-    } else if (role === 'chat-profile-cancel') {
-      editing = null;
-      $('.chat-profile-form').hidden = true;
-    } else if (role === 'chat-persona-save') {
-      config.persona = $('[data-role="chat-persona"]').value.trim();
-      await persistConfig();
-      testResult = '人设已保存'; showTestResult();
     }
   });
 
@@ -712,15 +579,19 @@ ${attachmentsToText(pendingAttachments)}` : text,
     if (e.target.matches('[data-role="chat-session"]')) {
       if (streaming) { renderToolbar(); return; } // 流式中不允许切换（渲染会打断流式节点）
       activeId = e.target.value || activeId;
+      editingMsg = null;
       saveSessions(sessions, activeId);
       syncMessages();
       renderMessages();
       return;
     }
     if (e.target.matches('[data-role="chat-profile"]')) {
-      config.activeProfileId = e.target.value || null;
+      const sel = parseSelectionValue(e.target.value);
+      if (!sel.profileId) return;
+      config.activeProfileId = sel.profileId;
+      config.activeModel = sel.model;
       await persistConfig();
-      renderAll();
+      return;
     }
   });
 
@@ -730,6 +601,7 @@ ${attachmentsToText(pendingAttachments)}` : text,
     if (!e.key || (e.key !== 'mqc.chat.sessions' && e.key !== 'mqc.chat.activeSession')) return;
     if (streaming) return;
     ({ sessions, activeId } = loadSessions());
+    editingMsg = null;
     syncMessages();
     renderAll();
   });
@@ -740,53 +612,13 @@ ${attachmentsToText(pendingAttachments)}` : text,
       const text = e.target.value.trim();
       if (text && !streaming) { e.target.value = ''; void doSend(text); }
     }
-  });
-
-  function showProfileForm(title) {
-    const form = $('.chat-profile-form');
-    form.hidden = false;
-    $('[data-role="chat-form-title"]').textContent = title;
-    form.querySelector('[data-field="name"]').value = editing?.name || '';
-    form.querySelector('[data-field="base_url"]').value = editing?.base_url || '';
-    form.querySelector('[data-field="model"]').value = editing?.model || '';
-    form.querySelector('[data-field="key"]').value = '';
-  }
-
-  async function saveProfileForm() {
-    const form = $('.chat-profile-form');
-    const name = form.querySelector('[data-field="name"]').value.trim();
-    const base_url = form.querySelector('[data-field="base_url"]').value.trim().replace(/\/+$/, '');
-    const model = form.querySelector('[data-field="model"]').value.trim();
-    const key = form.querySelector('[data-field="key"]').value.trim();
-    if (!name || !base_url || !model) { testResult = '名称 / Base URL / 模型不能为空'; showTestResult(); return; }
-
-    let id = editing?.id;
-    if (id) {
-      const p = config.profiles.find((x) => x.id === id);
-      Object.assign(p, { name, base_url, model });
-    } else {
-      // id 用名称+地址的内容摘要本地生成（稳定去重；后端原样存储不重算）
-      id = `p${hashSeed(`${name}${base_url}`)}`;
-      if (config.profiles.some((x) => x.id === id)) { testResult = '同名配置已存在'; showTestResult(); return; }
-      config.profiles.push({ id, name, base_url, model });
+    // 编辑框内 Enter = 保存重发（Shift+Enter 换行）
+    if (e.target.matches('[data-role="msg-edit-box"]') && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void resendEdited(editingMsg);
     }
-    if (key) await setChatKey(id, key);
-    if (!config.activeProfileId) config.activeProfileId = id;
-    await persistConfig();
-    editing = null;
-    form.hidden = true;
-    testResult = key ? '已保存，密钥已写入凭据管理器' : '已保存';
-    renderAll();
-    showTestResult();
-  }
-
-  function hashSeed(str) {
-    let h = 5381;
-    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
-    return h.toString(36);
-  }
+  });
 
   // 初始化
   void reloadConfig();
-  void refreshVoiceKeyState();
 }

@@ -163,16 +163,21 @@ export function renameSession(sessions, id, title) {
 
 // ——— 额度供应商 → 对话模型联动 ———
 
-/// 由额度供应商配置生成对话 profile：id 稳定（prov-<供应商id>），
-/// 重复导入天然覆盖旧值 = 同步语义。模型取供应商的 chatModel，
+/// 由额度供应商配置生成对话模型供应商：id 稳定（prov-<供应商id>），
+/// 重复同步天然覆盖旧值。模型取供应商的 chatModel（可含多个、逗号/换行分隔），
 /// 未设置时回退类型注册表 defaultChatModel。
 export function buildProfileFromProvider(p) {
   const type = getProviderType(p.type);
+  const raw = p.chatModel || type.defaultChatModel || '';
+  const models = String(raw)
+    .split(/[,，\n]/)
+    .map((m) => m.trim())
+    .filter(Boolean);
   return {
     id: `prov-${p.id}`,
     name: p.name,
     base_url: String(p.baseUrl || type.defaultBaseUrl || '').replace(/\/+$/, ''),
-    model: p.chatModel || type.defaultChatModel || '',
+    models,
   };
 }
 
@@ -278,8 +283,10 @@ export async function deleteChatKey(profileId) {
   return invoke('chat_delete_key', { profileId });
 }
 
-export async function testChatConnection() {
-  return invoke('chat_test_connection');
+/// 凭据管理器两条密钥条目间复制（api:<profileId> ↔ quota:<providerId>），
+/// 明文不出 keyring；源条目无 Key 时返回 false。
+export function copyKeyEntry(from, to) {
+  return invoke('chat_copy_key', { from, to });
 }
 
 export function cancelChat() {

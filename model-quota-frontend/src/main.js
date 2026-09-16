@@ -4,6 +4,7 @@ import { createLogger } from './core/logger.js';
 import { createQuotaService } from './core/service.js';
 import { initTheme } from './core/theme.js';
 import { secretsAvailable, readSecret, migrateSecretsToKeyring } from './core/secrets.js';
+import { syncModelsAndQuota } from './core/models.js';
 import { renderApp } from './ui/app.js';
 import { renderMini } from './ui/mini.js';
 import { renderBall } from './ui/ball.js';
@@ -52,13 +53,20 @@ if (panelMatch) {
 } else if (view === 'pet') {
   renderPet({ root, repo });
 } else {
-  // 主窗：桌面版先把存量明文密钥迁入系统凭据管理器（失败不阻塞，明文保留下次重试），再渲染
+  // 主窗：桌面版先把存量明文密钥迁入系统凭据管理器（失败不阻塞，明文保留下次重试），
+  // 再做模型配置 ↔ 额度查询双向同步（模型配置里加的 API 补进供应商列表，
+  // 供应商里配好的 OpenAI 兼容 API 变成可切换的对话模型），最后渲染
   const boot = async () => {
     if (secretsAvailable()) {
       try {
         await migrateSecretsToKeyring(repo);
       } catch {
         /* 迁移失败继续明文运行 */
+      }
+      try {
+        await syncModelsAndQuota(repo);
+      } catch {
+        /* 同步失败不阻塞启动，进「模型配置」页会再试 */
       }
     }
     renderApp({ root, repo, logger, service });

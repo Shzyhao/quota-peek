@@ -28,6 +28,11 @@ export async function deleteSecret(providerId) {
   return invoke('quota_secret_delete', { providerId });
 }
 
+// 是否已存密钥（不读值）：模型配置 ↔ 额度查询同步时判断供应商是否可用
+export async function hasSecret(providerId) {
+  return invoke('quota_secret_has', { providerId });
+}
+
 // 清理孤儿凭据条目：备份导入等整表覆盖场景后，之前存过密钥但已不在列表中的
 // 供应商，其凭据管理器条目不再被任何记录引用，逐个删除。返回清理条数。
 export async function cleanupOrphanSecrets(previousIds, currentIds) {

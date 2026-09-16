@@ -35,7 +35,7 @@ function panelShell(root, title, body) {
 
 export function renderChatPanel({ root, repo }) {
   panelShell(root, '对话 · 桌看', '');
-  // 面板模式：只留会话与对话内容，模型/语音配置回主窗设置（panel 选项隐藏配置入口）
+  // 面板模式：会话 + 模型下拉自由切换；供应商与语音的增删改在主窗「模型配置」页
   mountChatPage(root.querySelector('[data-role="panel-root"]'), { repo, panel: true });
 }
 

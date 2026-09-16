@@ -111,7 +111,7 @@ describe('chatView 会话附件', () => {
     root.querySelector('[data-role="chat-attach"]').click();
     await vi.waitFor(() => {
       expect(root.querySelector('[data-role="chat-attachments"]').hidden).toBe(true);
-      const hint = root.querySelector('[data-role="chat-test-result"]');
+      const hint = root.querySelector('[data-role="chat-hint"]');
       expect(hint.textContent).toContain('解析失败');
     });
   });
@@ -139,7 +139,7 @@ describe('chatView 会话附件', () => {
     expect(localStorage.getItem('mqc.chat.agentAutoReadonly')).toBeNull();
   });
 
-  it('panel 模式不渲染配置区，工具栏只留内容相关控件', async () => {
+  it('panel 模式不渲染配置表单，工具栏保留会话与模型下拉', async () => {
     localStorage.removeItem('mqc.chat.agent');
     localStorage.removeItem('mqc.chat.agentAutoReadonly');
     stubTauri();
@@ -148,16 +148,30 @@ describe('chatView 会话附件', () => {
     mountChatPage(root, { repo: { listProviders: () => [] }, panel: true });
     await vi.waitFor(() => expect(root.querySelector('[data-role="chat-send"]')).toBeTruthy());
 
-    // 配置区与配置入口完全不进 DOM
+    // 配置表单 / 测试连接 / 清空记录 / 删除会话不进面板（配置在主窗「模型配置」页）
     expect(root.querySelector('.chat-config')).toBeNull();
-    for (const role of ['chat-config-toggle', 'chat-test', 'chat-profile', 'chat-session-del']) {
+    expect(root.querySelector('.chat-profile-form')).toBeNull();
+    for (const role of ['chat-config-toggle', 'chat-test', 'chat-clear', 'chat-session-del']) {
       expect(root.querySelector(`[data-role="${role}"]`)).toBeNull();
     }
-    // 内容相关控件保留
+    // 会话与模型下拉保留（面板内也能自由切换模型）
     expect(root.querySelector('[data-role="chat-session"]')).toBeTruthy();
     expect(root.querySelector('[data-role="chat-session-new"]')).toBeTruthy();
-    expect(root.querySelector('[data-role="chat-clear"]')).toBeTruthy();
+    expect(root.querySelector('[data-role="chat-profile"]')).toBeTruthy();
     expect(root.querySelector('[data-role="chat-messages"]')).toBeTruthy();
+  });
+
+  it('主窗模式：无测试连接 / 清空记录 / 配置入口（已迁至「模型配置」页）', async () => {
+    stubTauri();
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-send"]')).toBeTruthy());
+    for (const role of ['chat-test', 'chat-clear', 'chat-config-toggle']) {
+      expect(root.querySelector(`[data-role="${role}"]`)).toBeNull();
+    }
+    expect(root.querySelector('[data-role="chat-session-del"]')).toBeTruthy(); // 删除会话保留
+    expect(root.querySelector('[data-role="chat-profile"]')).toBeTruthy();
   });
 });
 
@@ -259,16 +273,16 @@ describe('chatView 语音对话', () => {
     expect(JSON.parse(localStorage.getItem('mqc.voice.config')).autoRead).toBe(false);
   });
 
-  it('未配置语音服务时点麦克风给出配置指引', async () => {
+  it('未配置语音服务时点麦克风给出配置指引（指向「模型配置」页）', async () => {
     voiceStubTauri({ voiceHasKey: false });
     const root = mount();
     await vi.waitFor(() => expect(root.querySelector('[data-role="chat-mic"]')).toBeTruthy());
     root.querySelector('[data-role="chat-mic"]').click();
     await vi.waitFor(() => {
-      expect(root.querySelector('[data-role="chat-test-result"]').textContent).toContain('语音服务');
+      const hint = root.querySelector('[data-role="chat-hint"]');
+      expect(hint.textContent).toContain('语音服务');
+      expect(hint.textContent).toContain('模型配置');
     });
-    // 配置面板自动展开引导
-    expect(root.querySelector('.chat-config').hidden).toBe(false);
   });
 
   it('录音→识别→自动发送全链路；桌宠同步 recording/idle 状态', async () => {
@@ -355,5 +369,126 @@ describe('chatView 语音对话', () => {
       .filter(([ev]) => ev === 'pet-chat-status')
       .map(([, p]) => p.state);
     expect(states).toContain('speaking');
+  });
+});
+
+// ——— 模型下拉与消息操作（复制 / 编辑重发） ———
+
+function chatStubTauri({ capture = [] } = {}) {
+  let cfgState = {
+    profiles: [{ id: 'p1', name: 'GLM', base_url: 'https://x', models: ['glm-4.6', 'glm-4-air'] }],
+    active_profile_id: 'p1',
+    active_model: 'glm-4-air',
+    persona: '',
+  };
+  const saved = [];
+  globalThis.__TAURI__ = {
+    core: {
+      invoke: vi.fn(async (cmd, args) => {
+        if (cmd === 'chat_get_config') return JSON.parse(JSON.stringify(cfgState));
+        if (cmd === 'chat_save_config') { saved.push(args.cfg); cfgState = JSON.parse(JSON.stringify(args.cfg)); return null; }
+        if (cmd === 'chat_has_key') return true;
+        if (cmd === 'chat_send') {
+          capture.push(args);
+          setTimeout(() => {
+            args?.onEvent?.onmessage?.({ type: 'token', data: { text: '收到' } });
+            args?.onEvent?.onmessage?.({ type: 'done', data: { usage: null } });
+          }, 0);
+          return null;
+        }
+        return null;
+      }),
+      Channel: vi.fn(),
+    },
+    event: { emit: vi.fn(), listen: vi.fn(async () => () => {}) },
+  };
+  return { saved };
+}
+
+function seedSession(messages) {
+  localStorage.setItem('mqc.chat.sessions', JSON.stringify([{ id: 's1', title: '测试', createdAt: 1, updatedAt: 1, messages }]));
+  localStorage.setItem('mqc.chat.activeSession', 's1');
+  localStorage.setItem('mqc.chat.agent', '0'); // 走纯对话通道
+}
+
+describe('chatView 模型下拉与消息操作', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    document.body.innerHTML = '';
+  });
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+  });
+
+  it('模型下拉展开 供应商×模型；切换持久化 active_model', async () => {
+    const { saved } = chatStubTauri();
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => {
+      const sel = root.querySelector('[data-role="chat-profile"]');
+      expect(sel.options).toHaveLength(2);
+    });
+    const sel = root.querySelector('[data-role="chat-profile"]');
+    expect(sel.options[0].textContent).toBe('GLM · glm-4.6');
+    expect(sel.options[1].selected).toBe(true); // active_model 生效
+
+    sel.value = sel.options[0].value;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(saved.length).toBe(1));
+    expect(saved[0].active_profile_id).toBe('p1');
+    expect(saved[0].active_model).toBe('glm-4.6');
+  });
+
+  it('复制消息写入剪贴板并给出 ✓ 反馈', async () => {
+    chatStubTauri();
+    seedSession([{ role: 'user', content: '要复制的话', time: 1 }]);
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="msg-copy"]')).toBeTruthy());
+
+    const btn = root.querySelector('[data-role="msg-copy"]');
+    btn.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('要复制的话'));
+    await vi.waitFor(() => expect(btn.classList.contains('copied')).toBe(true));
+  });
+
+  it('发送失败（中断）后可编辑用户消息并重发：截断其后历史', async () => {
+    const capture = [];
+    chatStubTauri({ capture });
+    seedSession([
+      { role: 'user', content: '原始问题', time: 1 },
+      { role: 'assistant', content: '（请求失败：超时）', error: true, time: 2 },
+    ]);
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelectorAll('.chat-bubble').length).toBe(2));
+
+    // 中断后：编辑按钮只在用户消息上
+    expect(root.querySelectorAll('[data-role="msg-edit"]').length).toBe(1);
+    root.querySelector('[data-role="msg-edit"]').click();
+    const box = root.querySelector('[data-role="msg-edit-box"]');
+    await vi.waitFor(() => expect(box).toBeTruthy());
+    expect(box.value).toBe('原始问题');
+    box.value = '改写后的问题';
+    root.querySelector('[data-role="msg-edit-save"]').click();
+
+    await vi.waitFor(() => expect(capture).toHaveLength(1));
+    // 重发内容 = 编辑后的文本（无供应商 → 无额度 system，最后一条即用户消息）
+    const msgs = capture[0].messages;
+    expect(msgs[msgs.length - 1]).toEqual({ role: 'user', content: '改写后的问题' });
+    await vi.waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem('mqc.chat.sessions'));
+      const m = stored[0].messages;
+      expect(m).toHaveLength(2);
+      expect(m[0].content).toBe('改写后的问题');
+      expect(m[1].content).toBe('收到');
+      expect(m[1].error).toBeFalsy();
+    });
   });
 });

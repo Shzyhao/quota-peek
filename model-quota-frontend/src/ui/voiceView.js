@@ -131,7 +131,7 @@ export function mountVoicePage(el, { repo, voiceDeps } = {}) {
     const cfg = await getChatConfig();
     const profile = cfg.profiles.find((p) => p.id === cfg.active_profile_id) || null;
     if (!profile) {
-      setStatus('还没有对话模型：请在主窗「对话」页的「模型配置」里添加');
+      setStatus('还没有对话模型：请在主窗「模型配置」页添加供应商');
       return;
     }
 
@@ -185,7 +185,7 @@ export function mountVoicePage(el, { repo, voiceDeps } = {}) {
     const hasKey = await hasVoiceKey().catch(() => false);
     voiceConfig = loadVoiceConfig();
     if (!isVoiceConfigured(voiceConfig, hasKey)) {
-      setStatus('语音服务还没配置：请在主窗「对话」页 →「模型配置」→「语音服务」里设置');
+      setStatus('语音服务还没配置：请在主窗「模型配置」页的「语音服务」里设置');
       return;
     }
     voiceRecorder = voiceRecorder || createVoiceRecorder(voiceDeps);

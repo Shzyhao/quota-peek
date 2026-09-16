@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use liteai_config::{ApiProfile, KeyringStore};
+use liteai_config::KeyringStore;
 use liteai_core::{
     AnalysisPipeline, ChatMessage, ChatRequest, ChatUsage, FileMeta, ModelClient, ModelConfig,
     ModelError, OutputConfig, OutputMode, PromptBuilder, SecretStore,
@@ -29,13 +29,44 @@ const CHAT_TEMPERATURE: f32 = 0.7;
 pub const DEFAULT_PERSONA: &str = "你是用户的桌面宠物小助手，性格活泼友善、回复简洁。\
 你常驻在用户的 Windows 桌面上，可以陪聊、回答问题，也能帮用户留意大模型额度状态。";
 
-/// 桌宠对话配置：多套 OpenAI 兼容模型 + 人设，存 app_config_dir/pet-config.json
+/// 模型供应商配置：一个供应商可预设多个模型（第一个为默认）。
+/// `model` 是旧版单模型字段，仅作读取兼容（加载时并入 models，不再写出依赖）。
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct ModelProfile {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+}
+
+impl ModelProfile {
+    /// 生效模型：models 优先（第一个为默认），回退旧 model 字段
+    pub fn effective_model(&self) -> Option<&str> {
+        self.models
+            .iter()
+            .find(|m| !m.trim().is_empty())
+            .map(String::as_str)
+            .filter(|m| !m.is_empty())
+            .or(if self.model.trim().is_empty() { None } else { Some(self.model.as_str()) })
+    }
+}
+
+/// 桌宠对话配置：多模型供应商 + 当前选中 + 人设，存 app_config_dir/pet-config.json
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct PetConfig {
     #[serde(default)]
-    pub profiles: Vec<ApiProfile>,
+    pub profiles: Vec<ModelProfile>,
     #[serde(default)]
     pub active_profile_id: Option<String>,
+    /// 当前选中的具体模型名（须属于 active profile 的 models；空 = 该供应商默认模型）
+    #[serde(default)]
+    pub active_model: Option<String>,
     /// 桌宠人设（system prompt）；空串用内置默认
     #[serde(default)]
     pub persona: String,
@@ -83,10 +114,17 @@ fn pet_config_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn load_pet_config(app: &AppHandle) -> PetConfig {
-    pet_config_path(app)
+    let mut cfg = pet_config_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .and_then(|raw| serde_json::from_str::<PetConfig>(&raw).ok())
+        .unwrap_or_default();
+    // 旧版单模型字段迁移：models 为空且 model 非空时并入 models（保持首个为默认）
+    for p in &mut cfg.profiles {
+        if p.models.is_empty() && !p.model.trim().is_empty() {
+            p.models = vec![p.model.trim().to_string()];
+        }
+    }
+    cfg
 }
 
 fn persist_pet_config(app: &AppHandle, cfg: &PetConfig) -> Result<(), String> {
@@ -105,21 +143,31 @@ fn model_error_message(e: ModelError) -> String {
     }
 }
 
-/// 取当前激活 profile 与对应密钥，供对话 / 连接测试 / 文件分析 / Agent 共用
-pub(crate) fn active_profile_with_key(state: &ChatState) -> Result<(ApiProfile, String), String> {
+/// 取当前激活 profile、生效模型与对应密钥，供对话 / 文件分析 / Agent 共用。
+/// 生效模型 = active_model（须在该 profile 的 models 内），否则回退首个预设；
+/// active_profile_id 失效（如该配置已删）回退首家，与前端下拉的回退一致。
+pub(crate) fn active_profile_with_key(state: &ChatState) -> Result<(ModelProfile, String, String), String> {
     let cfg = state.config.lock().unwrap();
     let profile = cfg
         .profiles
         .iter()
         .find(|p| Some(&p.id) == cfg.active_profile_id.as_ref())
+        .or_else(|| cfg.profiles.first())
         .cloned()
-        .ok_or("没有可用的模型配置，请先在对话页添加")?;
+        .ok_or("没有可用的模型配置，请先在「模型配置」页添加")?;
+    let model = cfg
+        .active_model
+        .as_deref()
+        .filter(|m| profile.models.iter().any(|x| x == m))
+        .map(str::to_string)
+        .or_else(|| profile.effective_model().map(str::to_string))
+        .ok_or("该供应商没有预设模型，请到「模型配置」页补充")?;
     let key = state
         .secrets
         .get(&format!("{KEY_PREFIX}{}", profile.id))
         .map_err(|e| e.to_string())?
         .ok_or("该配置未设置 API Key")?;
-    Ok((profile, key))
+    Ok((profile, key, model))
 }
 
 // ——— 配置 ———
@@ -163,43 +211,61 @@ pub fn chat_delete_key(state: State<'_, ChatState>, profile_id: String) -> Resul
         .map_err(|e| e.to_string())
 }
 
-// ——— 连接测试（连通性 + 余额） ———
+// ——— 密钥条目复制（模型配置 ↔ 额度查询同步用） ———
 
+/// 在凭据管理器两条密钥条目间复制：`api:<profileId>`（对话，纯 Key 字符串）
+/// 与 `quota:<providerId>`（额度，{apiKey, apiSecret} JSON）互转，明文不出 keyring。
+/// 返回是否复制成功（源条目无可用 Key 时返回 false，不算错误）。
 #[tauri::command]
-pub async fn chat_test_connection(
-    state: State<'_, ChatState>,
-) -> Result<serde_json::Value, String> {
-    let (profile, key) = active_profile_with_key(&state)?;
-    let client = OpenAiClient::new(key, profile.base_url.clone());
-    let mut result = serde_json::json!({
-        "ok": false,
-        "message": "",
-        "profile": profile.name,
-        "model": profile.model,
-    });
-    // 连通性优先：ping 失败直接返回；成功则尽力补余额（平台不支持时优雅降级）
-    match client.ping(&profile.base_url, &profile.model).await {
-        Err(e) => {
-            result["message"] = model_error_message(e).into();
-            return Ok(result);
+pub fn chat_copy_key(state: State<'_, ChatState>, from: String, to: String) -> Result<bool, String> {
+    let read_entry = |spec: &str| -> Result<Option<String>, String> {
+        let (kind, id) = spec.split_once(':').ok_or("密钥条目格式应为 api:<id> 或 quota:<id>")?;
+        if id.trim().is_empty() {
+            return Err("密钥条目 id 不能为空".into());
         }
-        Ok(()) => {
-            result["ok"] = true.into();
-            result["message"] = "连接成功".into();
+        match kind {
+            "api" => state.secrets.get(&format!("{KEY_PREFIX}{id}")).map_err(|e| e.to_string()),
+            "quota" => state
+                .secrets
+                .get(&format!("{QUOTA_KEY_PREFIX}{id}"))
+                .map_err(|e| e.to_string())
+                .map(|raw| {
+                    raw.and_then(|r| {
+                        serde_json::from_str::<serde_json::Value>(&r)
+                            .ok()
+                            .and_then(|v| v["apiKey"].as_str().map(str::to_string))
+                            .filter(|k| !k.is_empty())
+                    })
+                }),
+            _ => Err("密钥条目类型只支持 api / quota".into()),
         }
-    }
-    if let Ok(balance) = client.check_balance().await {
-        if balance.is_available {
-            let text = balance
-                .balance_infos
-                .iter()
-                .map(|b| format!("{} {}", b.total_balance, b.currency))
-                .collect::<Vec<_>>()
-                .join(" / ");
-            result["balance"] = text.into();
+    };
+    let write_entry = |spec: &str, api_key: &str| -> Result<(), String> {
+        let (kind, id) = spec.split_once(':').ok_or("密钥条目格式应为 api:<id> 或 quota:<id>")?;
+        if id.trim().is_empty() {
+            return Err("密钥条目 id 不能为空".into());
         }
-    }
-    Ok(result)
+        match kind {
+            "api" => state
+                .secrets
+                .set(&format!("{KEY_PREFIX}{id}"), api_key)
+                .map_err(|e| e.to_string()),
+            "quota" => state
+                .secrets
+                .set(
+                    &format!("{QUOTA_KEY_PREFIX}{id}"),
+                    &serde_json::json!({ "apiKey": api_key, "apiSecret": "" }).to_string(),
+                )
+                .map_err(|e| e.to_string()),
+            _ => Err("密钥条目类型只支持 api / quota".into()),
+        }
+    };
+    let api_key = match read_entry(&from)? {
+        Some(k) => k,
+        None => return Ok(false),
+    };
+    write_entry(&to, &api_key)?;
+    Ok(true)
 }
 
 // ——— 对话（流式） ———
@@ -217,7 +283,7 @@ pub fn chat_send(
     if state.running.swap(true, Ordering::SeqCst) {
         return Err("已有对话正在进行".into());
     }
-    let (profile, key) = active_profile_with_key(&state)?;
+    let (profile, key, model) = active_profile_with_key(&state)?;
     let persona = {
         let cfg = state.config.lock().unwrap();
         let p = cfg.persona.trim().to_string();
@@ -234,7 +300,7 @@ pub fn chat_send(
         full.extend(messages);
         let req = ChatRequest {
             base_url: profile.base_url.clone(),
-            model: profile.model.clone(),
+            model: model.clone(),
             messages: full,
             temperature: CHAT_TEMPERATURE,
         };
@@ -322,7 +388,7 @@ pub fn analyze_files(
     if state.analyze_running.swap(true, Ordering::SeqCst) {
         return Err("已有分析正在进行".into());
     }
-    let (profile, key) = active_profile_with_key(&state)?;
+    let (profile, key, model) = active_profile_with_key(&state)?;
     let files = resolve_files(&paths);
     if files.is_empty() {
         state.analyze_running.store(false, Ordering::SeqCst);
@@ -345,7 +411,7 @@ pub fn analyze_files(
         export_docx: false,
         export_xlsx: false,
     };
-    let model_cfg = ModelConfig { base_url: profile.base_url.clone(), model: profile.model.clone() };
+    let model_cfg = ModelConfig { base_url: profile.base_url.clone(), model: model.clone() };
 
     state.analyze_cancel.store(false, Ordering::SeqCst);
     let cancel = state.analyze_cancel.clone();
