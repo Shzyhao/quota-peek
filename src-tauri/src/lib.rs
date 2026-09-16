@@ -90,6 +90,9 @@ struct ShellState {
     bubble_up: AtomicBool,
     /// 当前气泡条高度（逻辑像素）：前端按气泡内容量高传过来，流式变高时增量调整
     bubble_strip: AtomicU32,
+    /// 面板拖动跟随：Some((面板label, 桌宠−面板偏移x, 偏移y))。拖动面板时桌宠
+    /// 按抓起瞬间的相对位置跟随移动，保持面板-桌宠锚定关系
+    panel_drag: Mutex<Option<(String, i32, i32)>>,
 }
 
 fn prefs_path(app: &AppHandle) -> Option<PathBuf> {
@@ -372,6 +375,10 @@ fn panel_anchor(app: &AppHandle, w: f64, h: f64) -> Option<(f64, f64)> {
 /// force_show=true（语音对话入口）：面板已可见时仅保持显示，绝不收起
 fn open_panel(app: &AppHandle, panel: &str, force_show: bool) {
     let Some((label, url, w, h, title)) = panel_conf(panel) else { return };
+    // 面板即将由程序重新定位：清除拖动跟随状态，防止残留偏移把桌宠拽走
+    if let Some(st) = shell_state(app) {
+        *st.panel_drag.lock().unwrap() = None;
+    }
     // 互斥：打开一个面板时收起其余面板
     for other in PANEL_LABELS {
         if other != label {
@@ -618,6 +625,35 @@ pub fn run() {
                 bubble_expanded: AtomicBool::new(false),
                 bubble_up: AtomicBool::new(true),
                 bubble_strip: AtomicU32::new(0),
+                panel_drag: Mutex::new(None),
+            });
+
+            // 前端事件：面板标题栏按下拖动 → 桌宠按抓起瞬间的相对偏移跟随移动。
+            // 偏移在 drag-start 记录；每次面板 Moved 时移动桌宠（on_window_event）。
+            // 状态在 open_panel（面板重新锚定）时复位，防止残留偏移错误牵引
+            let app_for_pdrag = app.app_handle().clone();
+            app.listen("panel-drag-start", move |_event| {
+                let app = &app_for_pdrag;
+                let Some(st) = shell_state(app) else { return };
+                // 同一时刻只有一个面板可见（互斥），拖动的就是可见的那个
+                let binding = app.webview_windows();
+                let Some(panel) = binding
+                    .values()
+                    .find(|w| w.label().starts_with("panel-") && w.is_visible().unwrap_or(false))
+                else {
+                    return;
+                };
+                let Some(ball) = binding.get("ball") else { return };
+                if let (Ok(pp), Ok(bp)) = (panel.outer_position(), ball.outer_position()) {
+                    let label = panel.label().to_string();
+                    *st.panel_drag.lock().unwrap() = Some((label, bp.x - pp.x, bp.y - pp.y));
+                }
+            });
+            let app_for_pdrag_end = app.app_handle().clone();
+            app.listen("panel-drag-end", move |_event| {
+                if let Some(st) = shell_state(&app_for_pdrag_end) {
+                    *st.panel_drag.lock().unwrap() = None;
+                }
             });
             // 桌宠 AI 对话状态（配置 + 凭据 + 流式取消标志）
             app.manage(commands::ChatState::new(app.app_handle()));
@@ -823,6 +859,29 @@ pub fn run() {
                 }
             }
             if let tauri::WindowEvent::Moved(pos) = event {
+                // 面板拖动跟随：拖动的是面板时，桌宠按记录的偏移同步移动（钳制主屏内）
+                if window.label().starts_with("panel-") {
+                    let Some(st) = window.app_handle().try_state::<ShellState>() else { return };
+                    let drag = st.panel_drag.lock().unwrap().clone();
+                    if let Some((label, ox, oy)) = drag {
+                        if label == window.label() {
+                            if let Some(ball) = window.app_handle().get_webview_window("ball") {
+                                let scale = ball.scale_factor().unwrap_or(1.0);
+                                let (bw, bh) = (PET_W * scale, PET_H * scale);
+                                let monitor = window.app_handle().primary_monitor().ok().flatten();
+                                let mut nx = pos.x + ox;
+                                let mut ny = pos.y + oy;
+                                if let Some(m) = monitor {
+                                    let size = m.size();
+                                    nx = nx.clamp(0, size.width as i32 - bw as i32).max(0);
+                                    ny = ny.clamp(0, size.height as i32 - bh as i32).max(0);
+                                }
+                                let _ = ball.set_position(tauri::PhysicalPosition::new(nx, ny));
+                            }
+                        }
+                    }
+                    return;
+                }
                 // 悬浮球拖动后记住位置（物理坐标持久化，重启还原）；
                 // 功能菜单/对话气泡展开期间窗口原点含延伸条，跳过持久化（收起时会存回正确位置）
                 if window.label() == "ball" {

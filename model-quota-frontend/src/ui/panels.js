@@ -10,12 +10,24 @@ function panelShell(root, title, body) {
   document.documentElement.classList.add('panel-mode');
   root.innerHTML = `
     <div class="panel-shell">
-      <header class="panel-head">
-        <b data-tauri-drag-region>${title}</b>
+      <header class="panel-head" data-role="panel-head">
+        <b>${title}</b>
         <button class="panel-close" data-role="panel-close" title="收起（桌宠旁可再次打开）">✕</button>
       </header>
       <div class="panel-body"><div class="panel-root" data-role="panel-root"></div></div>
     </div>`;
+  // 标题栏手动拖动：拖动起止通知桌面壳，桌宠按初始偏移跟随面板一起移动
+  const head = root.querySelector('[data-role="panel-head"]');
+  head.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.target.closest('button')) return;
+    globalThis.__TAURI__?.event?.emit?.('panel-drag-start');
+    globalThis.__TAURI__?.window?.getCurrentWindow?.()?.startDragging?.();
+  });
+  globalThis.addEventListener?.('mouseup', () => {
+    // 原生拖动循环内鼠标在窗外松开时本事件可能收不到——桌面壳在下次
+    // panel-drag-start / open_panel 时会复位跟随状态，此处尽力而为
+    globalThis.__TAURI__?.event?.emit?.('panel-drag-end');
+  });
   root.querySelector('[data-role="panel-close"]').addEventListener('click', () => {
     globalThis.__TAURI__?.window?.getCurrentWindow?.()?.hide();
   });

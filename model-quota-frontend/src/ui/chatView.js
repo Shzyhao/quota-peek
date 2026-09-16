@@ -3,7 +3,7 @@
 // 流式逻辑与存储复用 core/chat.js，与桌宠窗气泡共用同一后端命令。
 
 import {
-  loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession, newSession,
+  loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession, newSession, renameSession,
   buildQuotaContext, buildOutgoingMessages, attachmentsToText,
   buildProfileFromProvider, importableProviders,
   isChatAvailable, getChatConfig, saveChatConfig, setChatKey, hasChatKey,
@@ -41,6 +41,8 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
   let agentHandlers = null;
   // 编辑中的 profile（null = 新建未开始；{...profile, key} = 编辑/新建表单内容）
   let editing = null;
+  // 会话历史：正在重命名的会话 id（null = 无）
+  let renamingId = null;
   let testResult = '';
   // 语音对话：麦克风状态机 idle→recording→transcribing；朗读播放标记；
   // 录音器懒创建（首次点麦克风才申请 getUserMedia，避免挂载即碰媒体设备）
@@ -74,7 +76,8 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
       <button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>
       <select data-role="chat-profile" title="当前使用的模型配置"></select>
       <button class="btn" data-role="chat-test">测试连接</button>
-      <button class="btn" data-role="chat-config-toggle">模型配置</button>`}
+      <button class="btn" data-role="chat-config-toggle">模型配置</button>
+      <button class="btn" data-role="chat-history-toggle" title="查看全部会话历史（切换 / 重命名 / 删除）">🕘 历史</button>`}
       <button class="btn danger" data-role="chat-clear" title="清空当前会话的聊天记录">清空记录</button>
     </div>
     ${panel ? '' : `
@@ -122,6 +125,13 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
         </div>
       </div>
       <p class="settings-hint" data-role="chat-test-result"></p>
+    </div>
+    <div class="chat-history" data-role="chat-history" hidden>
+      <div class="chat-history-head">
+        <b>会话历史</b>
+        <span class="settings-hint">点击会话切换 · 重命名后回车保存 · 与桌宠面板实时同步</span>
+      </div>
+      <div data-role="chat-history-list"></div>
     </div>`}
     <div class="chat-messages" data-role="chat-messages"></div>
     <div class="chat-attachments" data-role="chat-attachments" hidden></div>
@@ -247,6 +257,51 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
         </div>`;
     });
     box.innerHTML = items.join('') || '<p class="settings-hint">暂无可导入的供应商（先在「供应商」页添加）。</p>';
+  }
+
+  // 会话历史列表：切换 / 重命名 / 删除（仅主窗）
+  function renderHistory() {
+    const box = $('[data-role="chat-history-list"]');
+    if (!box) return;
+    const sorted = [...sessions].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+    box.innerHTML = sorted.map((s2) => {
+      const meta = `${(s2.messages || []).length} 条 · ${new Date(s2.updatedAt || s2.createdAt || Date.now()).toLocaleString('zh-CN', { hour12: false })}`;
+      if (renamingId === s2.id) {
+        return `
+        <div class="chat-history-item ${s2.id === activeId ? 'active' : ''}">
+          <input class="chat-history-rename-input" data-role="chat-history-rename-input" data-id="${escapeHtml(s2.id)}" value="${escapeHtml(s2.title)}" maxlength="30">
+          <div class="chat-history-actions">
+            <button class="btn small" data-role="chat-history-rename-save" data-id="${escapeHtml(s2.id)}">保存</button>
+            <button class="btn" data-role="chat-history-rename-cancel">取消</button>
+          </div>
+        </div>`;
+      }
+      return `
+      <div class="chat-history-item ${s2.id === activeId ? 'active' : ''}">
+        <div class="chat-history-main" data-role="chat-history-switch" data-id="${escapeHtml(s2.id)}" title="切换到此会话">
+          <b class="chat-history-title">${escapeHtml(s2.title)}</b>
+          <span class="settings-hint">${escapeHtml(meta)}</span>
+        </div>
+        <div class="chat-history-actions">
+          <button class="btn small" data-role="chat-history-rename" data-id="${escapeHtml(s2.id)}">重命名</button>
+          <button class="btn small danger" data-role="chat-history-del" data-id="${escapeHtml(s2.id)}">删除</button>
+        </div>
+      </div>`;
+    }).join('') || '<p class="settings-hint">还没有会话。</p>';
+    const input = box.querySelector('[data-role="chat-history-rename-input"]');
+    if (input) {
+      input.focus();
+      input.select();
+      input.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.stopPropagation();
+          box.querySelector(`[data-role="chat-history-rename-save"][data-id="${input.dataset.id}"]`)?.click();
+        } else if (ev.key === 'Escape') {
+          renamingId = null;
+          renderHistory();
+        }
+      });
+    }
   }
 
   function renderAll() {
@@ -636,6 +691,45 @@ ${attachmentsToText(pendingAttachments)}` : text,
       ({ sessions, activeId } = saveSessions([fresh, ...sessions], fresh.id));
       syncMessages();
       renderAll();
+    } else if (role === 'chat-history-toggle') {
+      const panelEl = $('[data-role="chat-history"]');
+      if (panelEl) {
+        panelEl.hidden = !panelEl.hidden;
+        if (!panelEl.hidden) renderHistory();
+      }
+    } else if (role === 'chat-history-switch') {
+      const fresh = loadSessions();
+      if (fresh.sessions.some((x) => x.id === id)) {
+        activeId = id;
+        saveSessions(fresh.sessions, activeId);
+        syncMessages();
+        renamingId = null;
+        renderAll();
+      }
+      const panelEl = $('[data-role="chat-history"]');
+      if (panelEl) panelEl.hidden = true;
+    } else if (role === 'chat-history-rename') {
+      renamingId = id;
+      renderHistory();
+    } else if (role === 'chat-history-rename-save') {
+      const input = document.querySelector(`[data-role="chat-history-rename-input"][data-id="${id}"]`);
+      const fresh = loadSessions();
+      sessions = renameSession(fresh.sessions, id, input ? input.value : '');
+      saveSessions(sessions, activeId);
+      syncMessages();
+      renamingId = null;
+      renderAll();
+      renderHistory();
+    } else if (role === 'chat-history-rename-cancel') {
+      renamingId = null;
+      renderHistory();
+    } else if (role === 'chat-history-del') {
+      const fresh = loadSessions();
+      ({ sessions, activeId } = deleteSession(fresh.sessions, activeId, id));
+      syncMessages();
+      renamingId = null;
+      renderAll();
+      renderHistory();
     } else if (role === 'chat-session-del') {
       if (streaming) return;
       ({ sessions, activeId } = deleteSession(sessions, activeId, activeId));

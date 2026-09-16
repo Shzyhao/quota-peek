@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession,
+  loadSessions, saveSessions, appendToSession, clearActiveMessages, deleteSession, renameSession,
   newSession, titleFromText, migrateLegacyHistory,
   MAX_SESSIONS, HISTORY_LIMIT,
   buildQuotaContext, buildOutgoingMessages,
@@ -289,5 +289,27 @@ describe('额度供应商 → 对话模型联动', () => {
       { id: '3', name: '方舟', type: 'volcengine', enabled: true },
     ]);
     expect(out.map((p) => p.id)).toEqual(['1']);
+  });
+});
+
+import { memoryStorage } from '../src/core/storage.js';
+
+describe('renameSession', () => {
+  it('重命名指定会话并裁剪到 30 字', () => {
+    const sessions = [
+      { id: 'a', title: '旧名', messages: [1, 2, 3], updatedAt: 1 },
+      { id: 'b', title: 'B', messages: [], updatedAt: 2 },
+    ];
+    const out = renameSession(sessions, 'a', '  自定义会话名  ');
+    expect(out.find((x) => x.id === 'a').title).toBe('自定义会话名');
+    expect(out.find((x) => x.id === 'a').messages).toHaveLength(3);
+    expect(out.find((x) => x.id === 'b').title).toBe('B');
+    const long = renameSession(sessions, 'a', 'x'.repeat(50));
+    expect(long.find((x) => x.id === 'a').title).toHaveLength(30);
+  });
+
+  it('空标题原样返回', () => {
+    const sessions = [{ id: 'a', title: '旧名', messages: [] }];
+    expect(renameSession(sessions, 'a', '   ')).toEqual(sessions);
   });
 });

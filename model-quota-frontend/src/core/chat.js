@@ -151,6 +151,16 @@ export function deleteSession(sessions, activeId, id, storage = globalThis.local
   return saveSessions(rest, activeId === id ? null : activeId, storage);
 }
 
+// 重命名会话：返回更新后的会话数组（调用方负责 saveSessions 持久化）
+export function renameSession(sessions, id, title) {
+  const trimmed = String(title || '').trim();
+  if (!trimmed) return Array.isArray(sessions) ? sessions : [];
+  const now = Date.now();
+  return (Array.isArray(sessions) ? sessions : []).map((s) =>
+    s.id === id ? { ...s, title: trimmed.slice(0, 30), updatedAt: now } : s,
+  );
+}
+
 // ——— 额度供应商 → 对话模型联动 ———
 
 /// 由额度供应商配置生成对话 profile：id 稳定（prov-<供应商id>），

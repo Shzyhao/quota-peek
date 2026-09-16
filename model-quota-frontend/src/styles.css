@@ -2926,3 +2926,60 @@ input:disabled {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* ============ 会话历史面板（主窗「对话」页） ============ */
+.chat-history {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.chat-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.chat-history-head b { font-size: 13px; }
+.chat-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  margin-bottom: 6px;
+  background: var(--surface-2);
+}
+.chat-history-item.active { border-color: var(--primary); background: var(--primary-soft); }
+.chat-history-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: pointer;
+}
+.chat-history-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-history-item.active .chat-history-title { color: var(--primary); }
+.chat-history-actions { display: flex; gap: 4px; flex: none; }
+.chat-history-actions .btn { padding: 2px 8px; font-size: 12px; }
+.chat-history-rename-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 3px 8px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  color: inherit;
+}
