@@ -36,11 +36,6 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
   let streaming = false;
   // 会话附件（待发送）：[{name, content, truncated}]
   let attachments = [];
-  // Agent 模式：模型可提议系统工具，逐个经确认卡片批准执行
-  let agentMode = localStorage.getItem('mqc.chat.agent') === '1';
-  // ⚡ 只读工具自动批准（默认关）：开启后只读类调用跳过确认卡（仍落审计日志）
-  let autoReadonly = localStorage.getItem('mqc.chat.agentAutoReadonly') === '1';
-  let chainApproved = false; // 多步自主：本任务内后续工具调用不再确认
   let agentRunning = false;
   let agentLive = [];   // 运行中的工具卡片（挂起的提议/已执行结果），不入会话
   let agentHandlers = null;
@@ -54,6 +49,12 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
   let voiceState = 'idle';
   let voicePlaying = false;
   let voiceKeySet = false;
+
+  // Agent 模式默认开启、只读工具自动批准默认开启——开关在主窗「设置 · 对话 Agent」，
+  // 实时读 localStorage：设置页改动即时对所有对话窗口生效（聊天面板无按钮）
+  const agentMode = () => localStorage.getItem('mqc.chat.agent') !== '0';
+  const autoReadonly = () => localStorage.getItem('mqc.chat.agentAutoReadonly') !== '0';
+  let chainApproved = false; // 多步自主：本任务内后续工具调用不再确认
 
   const desktop = isChatAvailable();
   if (!desktop) {
@@ -76,6 +77,7 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
       <button class="btn" data-role="chat-config-toggle">模型配置</button>`}
       <button class="btn danger" data-role="chat-clear" title="清空当前会话的聊天记录">清空记录</button>
     </div>
+    ${panel ? '' : `
     <div class="chat-config" hidden>
       <div data-role="chat-profiles"></div>
       <div class="chat-import">
@@ -120,19 +122,17 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
         </div>
       </div>
       <p class="settings-hint" data-role="chat-test-result"></p>
-    </div>
+    </div>`}
     <div class="chat-messages" data-role="chat-messages"></div>
     <div class="chat-attachments" data-role="chat-attachments" hidden></div>
     <div class="chat-input">
       <textarea data-role="chat-input" rows="2" placeholder="和桌宠聊聊（Enter 发送）"></textarea>
       <div class="chat-input-actions">
-        <button class="btn chat-mic" data-role="chat-mic" title="语音输入：点一下开始说话，再点一下识别并发送">🎙</button>
-        <button class="btn" data-role="chat-attach" title="附加文件（pdf / docx / xlsx / txt / csv / json / 代码等文本类）">📎</button>
-        <button class="btn agent-toggle${voiceConfig.autoRead ? ' active' : ''}" data-role="chat-voice-toggle" title="回复朗读：模型回复完成后自动语音播报（可点此开关）">🔊 朗读</button>
-        <button class="btn agent-toggle${agentMode ? ' active' : ''}" data-role="chat-agent-toggle" title="Agent 模式：AI 可调用系统工具（每次执行都需你批准）">🔧 Agent</button>
-        <button class="btn agent-toggle${autoReadonly ? ' active' : ''}" data-role="agent-readonly-toggle" title="只读工具自动批准：时间/系统信息/列目录/读文件不再弹确认卡（仍记录审计日志）"${agentMode ? '' : ' hidden'}>⚡ 只读自动批准</button>
-        <button class="btn primary" data-role="chat-send">发送</button>
-        <button class="btn" data-role="chat-stop" hidden>停止</button>
+        <button class="btn chat-act chat-mic" data-role="chat-mic" title="语音输入：点一下开始说话，再点一下识别并发送">🎙</button>
+        <button class="btn chat-act" data-role="chat-attach" title="附加文件（pdf / docx / xlsx / txt / csv / json / 代码等文本类）">📎</button>
+        <button class="btn chat-act${voiceConfig.autoRead ? ' active' : ''}" data-role="chat-voice-toggle" title="回复朗读：模型回复完成后自动语音播报（点此开关）">🔊</button>
+        <button class="btn chat-act primary" data-role="chat-send" title="发送（Enter）">➤</button>
+        <button class="btn chat-act" data-role="chat-stop" title="停止生成" hidden>⏹</button>
       </div>
     </div>`;
 
@@ -156,6 +156,7 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
 
   async function renderProfileList() {
     const box = $('[data-role="chat-profiles"]');
+    if (!box) return;
     const items = await Promise.all(config.profiles.map(async (p) => {
       const hasKey = await hasChatKey(p.id).catch(() => false);
       const active = p.id === config.activeProfileId;
@@ -184,7 +185,7 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     for (const c of agentLive) {
       if (c.kind === 'proposed' && !c.done) html.push(proposedCardHtml(c));
     }
-    if (streaming && !agentMode) html.push('<div class="chat-bubble assistant streaming" data-role="chat-stream"><span class="chat-text"></span><span class="chat-cursor"></span></div>');
+    if (streaming && !agentMode()) html.push('<div class="chat-bubble assistant streaming" data-role="chat-stream"><span class="chat-text"></span><span class="chat-cursor"></span></div>');
     box.innerHTML = html.join('') || '<div class="chat-welcome">和桌宠打个招呼吧 👋<br/><small>对话发起时会自动附上你的额度数据，可以直接问「我还剩多少额度」</small></div>';
     box.scrollTop = box.scrollHeight;
   }
@@ -254,7 +255,8 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     void renderImportList();
     renderMessages();
     renderAttachments();
-    $('[data-role="chat-persona"]').value = config.persona || '';
+    const persona = $('[data-role="chat-persona"]');
+    if (persona) persona.value = config.persona || '';
   }
 
   // ——— 配置读写 ———
@@ -329,7 +331,7 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
 ${attachmentsToText(pendingAttachments)}` : text,
     });
 
-    if (agentMode) {
+    if (agentMode()) {
       agentRunning = true;
       agentLive = [];
       chainApproved = false;
@@ -361,7 +363,7 @@ ${attachmentsToText(pendingAttachments)}` : text,
     return {
       onToolProposed: (data) => {
         // ⚡ 只读自动批准：跳过确认卡直接放行（审计 auto=true）
-        if (autoReadonly && isReadonlyTool(data.name)) {
+        if (autoReadonly() && isReadonlyTool(data.name)) {
           void agentResolve(true, makeAgentHandlers(), { auto: true });
           return;
         }
@@ -619,21 +621,11 @@ ${attachmentsToText(pendingAttachments)}` : text,
       await refreshVoiceKeyState();
       testResult = '语音 Key 已删除';
       showTestResult();
-    } else if (role === 'chat-agent-toggle') {
-      agentMode = !agentMode;
-      localStorage.setItem('mqc.chat.agent', agentMode ? '1' : '0');
-      btn.classList.toggle('active', agentMode);
-      const ro = $('[data-role="agent-readonly-toggle"]');
-      if (ro) ro.hidden = !agentMode;
     } else if (role === 'agent-approve' || role === 'agent-deny' || role === 'agent-chain') {
       if (!agentRunning || !agentHandlers) return;
       el.querySelectorAll('.chat-tool-actions button').forEach((b) => (b.disabled = true));
       if (role === 'agent-chain') chainApproved = true;
       await agentResolve(role !== 'agent-deny', agentHandlers, { approveChain: role === 'agent-chain' });
-    } else if (role === 'agent-readonly-toggle') {
-      autoReadonly = !autoReadonly;
-      localStorage.setItem('mqc.chat.agentAutoReadonly', autoReadonly ? '1' : '0');
-      btn.classList.toggle('active', autoReadonly);
     } else if (role === 'chat-clear') {
       ({ sessions, activeId } = clearActiveMessages(sessions, activeId));
       syncMessages();

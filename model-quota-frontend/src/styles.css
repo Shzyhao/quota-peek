@@ -2824,3 +2824,19 @@ input:disabled {
 
 /* 日程提醒气泡里的备注行（桌宠窗） */
 .pet-remind-note { opacity: 0.75; font-size: 12px; }
+
+/* ============ 对话输入栏：紧凑图标按钮 + 输入框占满剩余宽度 ============ */
+.chat-input textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chat-input-actions { gap: 6px; flex: none; }
+.chat-input-actions .btn.chat-act {
+  width: 32px;
+  min-width: 32px;
+  padding: 5px 0;
+  justify-content: center;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.2;
+}

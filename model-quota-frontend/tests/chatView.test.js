@@ -116,50 +116,48 @@ describe('chatView 会话附件', () => {
     });
   });
 
-  it('Agent 开关切换并持久化', async () => {
+  it('Agent 无输入栏开关（默认开启，设置页控制）；朗读/发送为图标按钮', async () => {
+    localStorage.removeItem('mqc.chat.agent');
+    localStorage.removeItem('mqc.chat.agentAutoReadonly');
     stubTauri();
     const root = document.createElement('div');
     document.body.appendChild(root);
     mountChatPage(root, { repo: { listProviders: () => [] } });
-    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-agent-toggle"]')).toBeTruthy());
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-send"]')).toBeTruthy());
 
-    const toggle = root.querySelector('[data-role="chat-agent-toggle"]');
-    expect(toggle.classList.contains('active')).toBe(false);
-    toggle.click();
-    expect(toggle.classList.contains('active')).toBe(true);
-    expect(localStorage.getItem('mqc.chat.agent')).toBe('1');
-    toggle.click();
-    expect(localStorage.getItem('mqc.chat.agent')).toBe('0');
-  });
-});
-
-describe('chatView ⚡ 只读自动批准开关', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    document.body.innerHTML = '';
-  });
-  afterEach(() => {
-    delete globalThis.__TAURI__;
+    // Agent / 只读开关按钮已移除（默认开启，改在主窗「设置 · 对话 Agent」控制）
+    expect(root.querySelector('[data-role="chat-agent-toggle"]')).toBeNull();
+    expect(root.querySelector('[data-role="agent-readonly-toggle"]')).toBeNull();
+    // 其余操作按钮保留且为单字符图标（无文字）
+    for (const role of ['chat-mic', 'chat-attach', 'chat-voice-toggle', 'chat-send', 'chat-stop']) {
+      const btn = root.querySelector(`[data-role="${role}"]`);
+      expect(btn).toBeTruthy();
+      expect(btn.textContent.trim().length).toBeLessThanOrEqual(2);
+    }
+    // 设置页读取的默认值约定：未设置时 Agent 开、只读自动批准开
+    expect(localStorage.getItem('mqc.chat.agent')).toBeNull();
+    expect(localStorage.getItem('mqc.chat.agentAutoReadonly')).toBeNull();
   });
 
-  it('Agent 模式开启时才显示；切换持久化', async () => {
+  it('panel 模式不渲染配置区，工具栏只留内容相关控件', async () => {
+    localStorage.removeItem('mqc.chat.agent');
+    localStorage.removeItem('mqc.chat.agentAutoReadonly');
     stubTauri();
     const root = document.createElement('div');
     document.body.appendChild(root);
-    mountChatPage(root, { repo: { listProviders: () => [] } });
-    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-agent-toggle"]')).toBeTruthy());
+    mountChatPage(root, { repo: { listProviders: () => [] }, panel: true });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-send"]')).toBeTruthy());
 
-    const ro = root.querySelector('[data-role="agent-readonly-toggle"]');
-    expect(ro.hidden).toBe(true); // Agent 未开时隐藏
-    root.querySelector('[data-role="chat-agent-toggle"]').click();
-    expect(ro.hidden).toBe(false);
-    expect(ro.classList.contains('active')).toBe(false);
-
-    ro.click();
-    expect(ro.classList.contains('active')).toBe(true);
-    expect(localStorage.getItem('mqc.chat.agentAutoReadonly')).toBe('1');
-    ro.click();
-    expect(localStorage.getItem('mqc.chat.agentAutoReadonly')).toBe('0');
+    // 配置区与配置入口完全不进 DOM
+    expect(root.querySelector('.chat-config')).toBeNull();
+    for (const role of ['chat-config-toggle', 'chat-test', 'chat-profile', 'chat-session-del']) {
+      expect(root.querySelector(`[data-role="${role}"]`)).toBeNull();
+    }
+    // 内容相关控件保留
+    expect(root.querySelector('[data-role="chat-session"]')).toBeTruthy();
+    expect(root.querySelector('[data-role="chat-session-new"]')).toBeTruthy();
+    expect(root.querySelector('[data-role="chat-clear"]')).toBeTruthy();
+    expect(root.querySelector('[data-role="chat-messages"]')).toBeTruthy();
   });
 });
 
@@ -274,6 +272,7 @@ describe('chatView 语音对话', () => {
   });
 
   it('录音→识别→自动发送全链路；桌宠同步 recording/idle 状态', async () => {
+    localStorage.setItem('mqc.chat.agent', '0'); // 语音链路测试走纯对话通道
     vi.useFakeTimers();
     try {
       const sends = [];
@@ -307,6 +306,7 @@ describe('chatView 语音对话', () => {
   });
 
   it('回复完成后自动朗读（朗读文本经 markdown 清洗）', async () => {
+    localStorage.setItem('mqc.chat.agent', '0'); // 朗读测试走纯对话通道
     const speakCalls = [];
     class FakeAudio {
       constructor(src) { FakeAudio.instances.push(this); this.src = src; }

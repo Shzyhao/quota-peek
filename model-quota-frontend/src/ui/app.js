@@ -509,6 +509,17 @@ export function renderApp({ root, repo, logger, service }) {
   });
 
   root.addEventListener('change', (e) => {
+    // 对话 Agent 设置（localStorage，聊天窗口实时读取，改动即时生效）
+    const agentModeSel = e.target.closest('[data-chat-agent-mode]');
+    if (agentModeSel) {
+      localStorage.setItem('mqc.chat.agent', agentModeSel.value);
+      return;
+    }
+    const agentPermSel = e.target.closest('[data-chat-agent-perm]');
+    if (agentPermSel) {
+      localStorage.setItem('mqc.chat.agentAutoReadonly', agentPermSel.value === 'ro' ? '1' : '0');
+      return;
+    }
     const ballToggle = e.target.closest('[data-ball-toggle]');
     if (ballToggle) {
       tauriEvents?.emit?.('set-ball', ballToggle.checked);

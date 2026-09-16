@@ -205,7 +205,11 @@ describe('syncScheduleReminders', () => {
 
   it('桌面版：把窗口内实例同步给 set_schedule_reminders（含 timeText）', () => {
     const repo = createRepository(memoryStorage());
-    const r = normalizeScheduleItem({ title: '周会', date: '2026-09-16', time: '15:00', remindLead: 5 });
+    // 动态取「明天」（硬编码日期会随时间推移掉出 7 天同步窗口，成为时间炸弹）
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const p2 = (x) => String(x).padStart(2, '0');
+    const tDate = `${tomorrow.getFullYear()}-${p2(tomorrow.getMonth() + 1)}-${p2(tomorrow.getDate())}`;
+    const r = normalizeScheduleItem({ title: '周会', date: tDate, time: '15:00', remindLead: 5 });
     repo.saveSchedule(r.item);
     syncScheduleReminders(repo); // upsert 内部也会同步，这里手动构造精确计数
     expect(captured).toHaveLength(1);

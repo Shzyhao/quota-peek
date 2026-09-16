@@ -397,6 +397,24 @@ export function settingsView(ctx) {
 
       ${isDesktop ? petAppearanceCard() : ""}
       <section class="settings-card">
+        <h3>对话 Agent</h3>
+        <div class="settings-grid">
+          <label>Agent 模式
+            <select data-chat-agent-mode>
+              <option value="1" ${localStorage.getItem('mqc.chat.agent') !== '0' ? 'selected' : ''}>开启（默认）</option>
+              <option value="0" ${localStorage.getItem('mqc.chat.agent') !== '0' ? '' : 'selected'}>关闭</option>
+            </select>
+          </label>
+          <label>工具权限
+            <select data-chat-agent-perm>
+              <option value="ro" ${localStorage.getItem('mqc.chat.agentAutoReadonly') !== '0' ? 'selected' : ''}>只读工具自动批准（默认）</option>
+              <option value="confirm" ${localStorage.getItem('mqc.chat.agentAutoReadonly') !== '0' ? '' : 'selected'}>全部工具需确认</option>
+            </select>
+          </label>
+        </div>
+        <p class="settings-hint">Agent 模式下模型可调用系统工具（时间 / 读文件 / 列目录 / 打开网址 / 写文件 / 命令等），对话输入栏不再单独开关。「只读工具自动批准」仅跳过无副作用调用的确认卡，写文件、命令等操作仍需逐次确认并记录审计日志。改动即时对所有对话窗口（主窗与桌宠面板）生效。</p>
+      </section>
+      <section class="settings-card">
         <h3>数据备份</h3>
         <p class="settings-hint">${isDesktop
           ? '所有数据保存在本机（密钥在系统凭据管理器，配置在应用数据目录）。可导出 JSON 备份，或从备份文件恢复。<br>⚠ 桌面版备份文件不含密钥，导入到新机器后需重新录入各供应商密钥。'
