@@ -9,6 +9,7 @@
 // 全部走动态 import（也让 main/mini/ball 窗口不必背上 pixi 的体积）。
 
 import { analyzeFiles, isAnalysisAvailable } from '../core/analysis.js';
+import { startPetImagePusher } from '../core/phone.js';
 import { pickChatterLine, pickHoverLine } from '../core/chatter.js';
 import { escapeHtml } from './format.js';
 import {
@@ -687,6 +688,17 @@ export async function renderPet({ root, repo }) {
       showErrPlaceholder();
     }
   }
+
+  // 手机关联：服务开启时周期推送桌宠形象快照（pixi extract 导出 dataURL）
+  startPetImagePusher({
+    capture: () => {
+      try {
+        return app?.renderer?.extract?.base64?.(app.stage) || null;
+      } catch {
+        return null;
+      }
+    },
+  });
 
   return {
     app,

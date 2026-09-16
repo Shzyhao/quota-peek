@@ -10,6 +10,9 @@ import { renderMini } from './ui/mini.js';
 import { renderBall } from './ui/ball.js';
 import { renderPet } from './ui/pet.js';
 import { renderChatPanel, renderAnalysisPanel, renderSchedulePanel, renderVoicePanel } from './ui/panels.js';
+import { renderNoteWindow } from './ui/noteWindow.js';
+import { isClipboardAvailable, startClipboardWatcher } from './core/notes.js';
+import { startSessionPusher } from './core/phone.js';
 
 initTheme();
 
@@ -41,7 +44,10 @@ const view = new URLSearchParams(window.location.search).get('view')
   || (window.location.hash === '#ball' ? 'ball' : null)
   || (window.location.hash === '#pet' ? 'pet' : null);
 const panelMatch = window.location.hash.match(/^#panel-(chat|analysis|schedule|voice)$/);
-if (panelMatch) {
+if (window.location.hash === '#note') {
+  // 便签小窗（独立桌面便签：📌固定 / ×关闭）
+  renderNoteWindow({ root });
+} else if (panelMatch) {
   if (panelMatch[1] === 'chat') renderChatPanel({ root, repo });
   else if (panelMatch[1] === 'analysis') renderAnalysisPanel({ root, repo });
   else if (panelMatch[1] === 'schedule') renderSchedulePanel({ root, repo });
@@ -68,6 +74,9 @@ if (panelMatch) {
       } catch {
         /* 同步失败不阻塞启动，进「模型配置」页会再试 */
       }
+      // 便签：主窗轮询剪贴板（最近 20 条）；手机关联：会话摘要推送到局域网服务
+      if (isClipboardAvailable()) startClipboardWatcher();
+      startSessionPusher();
     }
     renderApp({ root, repo, logger, service });
   };

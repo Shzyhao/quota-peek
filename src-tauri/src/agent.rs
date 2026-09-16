@@ -372,7 +372,7 @@ impl AgentClient {
 
 // ——— 循环体 ———
 
-const AGENT_SYSTEM: &str = "你是桌看 Agent，可以调用工具帮用户完成系统操作。调用工具前先用一句话（同一条回复的文字部分）说明你要做什么；工具需要用户批准才会执行。每次回复只调用一个工具，等它的结果返回后再决定下一步。全程用中文，回答简洁。";
+pub(crate) const AGENT_SYSTEM: &str = "你是桌看 Agent，可以调用工具帮用户完成系统操作。调用工具前先用一句话（同一条回复的文字部分）说明你要做什么；工具需要用户批准才会执行。每次回复只调用一个工具，等它的结果返回后再决定下一步。全程用中文，回答简洁。";
 
 async fn run_loop(
     app: &AppHandle,
@@ -579,7 +579,9 @@ pub async fn agent_send(
     agent.cancel.store(false, Ordering::SeqCst);
     agent.steps.store(0, Ordering::SeqCst);
     agent.chain_approved.store(false, Ordering::SeqCst);
-    let mut msgs = vec![json!({ "role": "system", "content": AGENT_SYSTEM })];
+    // 系统提示词 = 内置 AGENT_SYSTEM + 用户预设提示词 + 已导入技能（Agent 设置）
+    let system = crate::commands::agent_system_prompt(&chat);
+    let mut msgs = vec![json!({ "role": "system", "content": system })];
     msgs.extend(messages);
     *agent.messages.lock().unwrap() = msgs;
 

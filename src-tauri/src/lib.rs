@@ -18,7 +18,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 mod agent;
-mod commands;/// 迷你窗逻辑尺寸（与 open_mini / 前端样式保持一致）
+mod commands;
+mod phone;/// 迷你窗逻辑尺寸（与 open_mini / 前端样式保持一致）
 const MINI_W: f64 = 300.0;
 const MINI_H: f64 = 430.0;
 /// 经典悬浮球窗口尺寸（球体 60px + 辉光余量，前端 .ball 呈现圆形）
@@ -424,6 +425,30 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+// ——— 便签小窗（独立桌面便签：输入内容、📌固定桌面、×关闭；内容存 localStorage） ———
+// 窗口由前端 WebviewWindow JS API 创建（label "note"，已在 capabilities 放行）；
+// 本命令仅在窗口已存在时聚焦（Tauri v2 在 command/run_on_main_thread 上下文同步
+// build 会死锁，事件回调可建窗但聚焦场景足够，故不在 Rust 侧建窗）。
+
+#[tauri::command]
+fn open_note_window(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.webview_windows().get("note") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+    Ok(())
+}
+
+/// 便签固定开关：置顶 = 钉在桌面所有窗口之上
+#[tauri::command]
+fn note_set_pin(app: AppHandle, pinned: bool) -> Result<(), String> {
+    if let Some(w) = app.webview_windows().get("note") {
+        w.set_always_on_top(pinned).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// 桌宠气泡播报是否可用（ball 窗存在且当前形态是 pet）：
 /// 日程提醒据此选择播报通道（桌宠气泡 or 系统 Toast），供 commands 调度线程调用
 pub fn pet_bubble_available(app: &AppHandle) -> bool {
@@ -608,6 +633,17 @@ pub fn run() {
             commands::update_tray_status,
             commands::set_schedule_reminders,
             commands::chat_read_file,
+            commands::clipboard_read_text,
+            commands::save_text_file,
+            commands::agent_import_skill,
+            commands::agent_delete_skill,
+            phone::phone_server_start,
+            phone::phone_server_stop,
+            phone::phone_server_status,
+            phone::phone_update_sessions,
+            phone::phone_update_pet,
+            open_note_window,
+            note_set_pin,
             pet_menu_layout,
             pet_bubble_layout,
             agent::agent_send,
@@ -657,6 +693,10 @@ pub fn run() {
             });
             // 桌宠 AI 对话状态（配置 + 凭据 + 流式取消标志）
             app.manage(commands::ChatState::new(app.app_handle()));
+            // 手机关联服务（局域网只读查看）
+            app.manage(std::sync::Arc::new(phone::PhoneState::default()));
+            // 便签剪贴板变化轮询线程（clipboard-win 打开带重试上限，绝不死锁）
+            commands::spawn_clipboard_watcher(app.app_handle().clone());
 
             // 后端定时刷新调度：Rust 常驻线程持有时钟（配置持久化 refresh.json，重启恢复），
             // 到点 emit backend-refresh-due 由主窗执行既有前端刷新编排

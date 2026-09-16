@@ -3089,3 +3089,238 @@ input:disabled {
   background: var(--surface);
   color: inherit;
 }
+
+/* ============ 便签页（主窗） ============ */
+.notes-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.notes-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.note-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.note-text {
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 132px;
+  overflow-y: auto;
+  cursor: pointer;
+}
+
+.note-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.note-actions { display: flex; gap: 6px; }
+
+/* ============ 便签小窗（#note，无框置顶小窗） ============ */
+html.note-mode,
+html.note-mode body {
+  overflow: hidden;
+  margin: 0;
+  height: 100%;
+  background: transparent;
+}
+
+.note-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #fbf3d0;
+  color: #4a3f22;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  border: 1px solid rgba(122, 104, 46, 0.25);
+}
+
+.note-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px 7px 10px;
+  background: rgba(122, 104, 46, 0.12);
+  user-select: none;
+}
+
+.note-title {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #6b5c28;
+}
+
+.note-pin,
+.note-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 6px;
+  color: #6b5c28;
+}
+
+.note-pin { opacity: 0.45; }
+.note-pin.active { opacity: 1; background: rgba(122, 104, 46, 0.2); }
+.note-close:hover, .note-pin:hover { background: rgba(122, 104, 46, 0.18); }
+
+.note-body {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #4a3f22;
+}
+
+/* ============ 模型配置：预设模型列表编辑 ============ */
+.model-list-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-row input { flex: 1; min-width: 0; }
+
+.model-row-del {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* ============ Agent 设置卡 ============ */
+.agent-prompt-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 8px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.agent-prompt-label textarea { resize: vertical; font: inherit; }
+
+.agent-skills { margin-top: 4px; }
+
+.agent-skills-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.agent-skill-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface);
+  margin-bottom: 6px;
+}
+
+.agent-skill-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============ 手机关联卡 ============ */
+.phone-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 8px;
+}
+
+.phone-status { margin: 0; font-weight: 600; color: var(--text-2); }
+
+.phone-qr {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+
+.phone-qr img {
+  border-radius: 8px;
+  background: #fff;
+  padding: 4px;
+}
+
+.phone-addr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13.5px;
+  font-family: Consolas, monospace;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+/* ============ 文件分析：模型下拉 + 结果头 ============ */
+.analysis-toolbar select {
+  max-width: 220px;
+}
+
+.analysis-result-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.analysis-result-head .analysis-status { flex: 1; }
+
+.analysis-result-head .btn { flex: none; }

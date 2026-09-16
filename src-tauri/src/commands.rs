@@ -57,7 +57,18 @@ impl ModelProfile {
     }
 }
 
-/// 桌宠对话配置：多模型供应商 + 当前选中 + 人设，存 app_config_dir/pet-config.json
+/// Agent 技能条目：导入的 markdown/文本文件（内容复制进配置目录 skills/ 下）
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct SkillEntry {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub path: String,
+}
+
+/// 桌宠对话配置：多模型供应商 + 当前选中 + 人设 + Agent 设置，存 app_config_dir/pet-config.json
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct PetConfig {
     #[serde(default)]
@@ -70,6 +81,12 @@ pub struct PetConfig {
     /// 桌宠人设（system prompt）；空串用内置默认
     #[serde(default)]
     pub persona: String,
+    /// Agent 预设提示词（追加在 Agent 系统提示之后）；空串不追加
+    #[serde(default)]
+    pub agent_prompt: String,
+    /// Agent 技能列表（内容注入 Agent 系统提示）
+    #[serde(default)]
+    pub skills: Vec<SkillEntry>,
 }
 
 /// 对话流事件（Channel 推送到前端；type 为 snake_case，与前端约定一致）
@@ -211,8 +228,56 @@ pub fn chat_delete_key(state: State<'_, ChatState>, profile_id: String) -> Resul
         .map_err(|e| e.to_string())
 }
 
-// ——— 密钥条目复制（模型配置 ↔ 额度查询同步用） ———
+/// 按指定 profile id 取配置与密钥（文件分析选模型用）；未给 id 回退当前激活。
+/// 返回 (profile, key)；模型名由调用方决定。
+pub(crate) fn profile_with_key_by_id(state: &ChatState, profile_id: Option<&str>) -> Result<(ModelProfile, String), String> {
+    let cfg = state.config.lock().unwrap();
+    let profile = cfg
+        .profiles
+        .iter()
+        .find(|p| Some(&p.id) == profile_id.map(str::to_string).as_ref())
+        .or_else(|| cfg.profiles.iter().find(|p| Some(&p.id) == cfg.active_profile_id.as_ref()))
+        .or_else(|| cfg.profiles.first())
+        .cloned()
+        .ok_or("没有可用的模型配置，请先在「模型配置」页添加")?;
+    let key = state
+        .secrets
+        .get(&format!("{KEY_PREFIX}{}", profile.id))
+        .map_err(|e| e.to_string())?
+        .ok_or("该配置未设置 API Key")?;
+    Ok((profile, key))
+}
 
+/// Agent 系统提示词：内置 AGENT_SYSTEM + 用户预设提示词 + 已导入技能内容。
+/// 单技能截断 4000 字符，总计截断 16000，防止提示词膨胀撑爆上下文。
+pub(crate) fn agent_system_prompt(state: &ChatState) -> String {
+    const SKILL_CAP: usize = 4000;
+    const TOTAL_CAP: usize = 16000;
+    let cfg = state.config.lock().unwrap();
+    let mut prompt = crate::agent::AGENT_SYSTEM.to_string();
+    let user_prompt = cfg.agent_prompt.trim();
+    if !user_prompt.is_empty() {
+        prompt.push_str("\n\n【用户预设要求】\n");
+        prompt.push_str(&user_prompt.chars().take(SKILL_CAP).collect::<String>());
+    }
+    let mut total = 0usize;
+    for skill in &cfg.skills {
+        let Ok(raw) = std::fs::read_to_string(&skill.path) else { continue };
+        let mut body: String = raw.chars().take(SKILL_CAP).collect();
+        if raw.chars().count() > SKILL_CAP {
+            body.push_str("\n（技能内容过长已截断）");
+        }
+        prompt.push_str(&format!("\n\n【技能：{}】\n{}", skill.name, body));
+        total += body.chars().count();
+        if total >= TOTAL_CAP {
+            prompt.push_str("\n（技能内容过多，后续技能省略）");
+            break;
+        }
+    }
+    prompt
+}
+
+// ——— 密钥条目复制（模型配置 ↔ 额度查询同步用） ———
 /// 在凭据管理器两条密钥条目间复制：`api:<profileId>`（对话，纯 Key 字符串）
 /// 与 `quota:<providerId>`（额度，{apiKey, apiSecret} JSON）互转，明文不出 keyring。
 /// 返回是否复制成功（源条目无可用 Key 时返回 false，不算错误）。
@@ -383,12 +448,19 @@ pub fn analyze_files(
     paths: Vec<String>,
     save: bool,
     custom: Option<String>,
+    profile_id: Option<String>,
+    model: Option<String>,
     on_event: Channel<liteai_core::PipelineEvent>,
 ) -> Result<(), String> {
     if state.analyze_running.swap(true, Ordering::SeqCst) {
         return Err("已有分析正在进行".into());
     }
-    let (profile, key, model) = active_profile_with_key(&state)?;
+    let (profile, key) = profile_with_key_by_id(&state, profile_id.as_deref())?;
+    // 模型名：前端指定 > 该供应商首个预设
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| profile.effective_model().map(str::to_string))
+        .ok_or("该供应商没有预设模型，请到「模型配置」页补充")?;
     let files = resolve_files(&paths);
     if files.is_empty() {
         state.analyze_running.store(false, Ordering::SeqCst);
@@ -1179,4 +1251,106 @@ pub fn spawn_schedule_reminder(app: AppHandle, state: std::sync::Arc<ReminderSta
             |s| *s == seq,
         );
     });
+}
+
+// ——— 便签：系统剪贴板（clipboard-win，OpenClipboard 带重试上限绝不死锁） ———
+// arboard 在本机环境 get_text/set_text 会无限挂死（第三方剪贴板占用者）；
+// clipboard-win 打开失败立即返回错误。变化由轮询线程 emit clipboard-changed。
+
+const CLIP_OPEN_ATTEMPTS: usize = 30;
+
+/// 打开剪贴板（重试上限内拿不到锁返回 None），执行 f 后自动关闭
+fn with_clipboard<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
+    let _clip = clipboard_win::Clipboard::new_attempts(CLIP_OPEN_ATTEMPTS).ok()?;
+    f()
+}
+
+/// 读取系统剪贴板纯文本；非文本或读取失败返回 None
+#[tauri::command]
+pub fn clipboard_read_text() -> Option<String> {
+    with_clipboard(|| clipboard_win::get(clipboard_win::formats::Unicode).ok())
+}
+
+/// 写系统剪贴板纯文本（便签记录一键复制用）
+#[tauri::command]
+pub fn clipboard_write_text(text: String) -> Result<(), String> {
+    with_clipboard(|| clipboard_win::set(clipboard_win::formats::Unicode, text).ok())
+        .ok_or_else(|| "剪贴板不可用（被其他程序占用）".into())
+}
+
+/// 便签轮询线程：检测剪贴板文本变化，变化即 emit clipboard-changed（前端入库去重）。
+pub fn spawn_clipboard_watcher(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last = String::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(1200));
+            let text: Option<String> =
+                with_clipboard(|| clipboard_win::get(clipboard_win::formats::Unicode).ok());
+            if let Some(t) = text {
+                if !t.trim().is_empty() && t != last {
+                    let _ = app.emit("clipboard-changed", t.clone());
+                    last = t;
+                }
+            }
+        }
+    });
+}
+
+// ——— 分析结果快速导出：文本写盘 ———
+
+#[tauri::command]
+pub fn save_text_file(path: String, content: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("保存路径不能为空".into());
+    }
+    std::fs::write(&path, content).map_err(|e| format!("写入失败：{e}"))
+}
+
+// ——— Agent 技能导入/删除（内容复制进配置目录 skills/ 下） ———
+
+fn skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|_| "无法定位配置目录")?
+        .join("skills");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// 导入技能文件：复制到配置目录（防源文件移动/删除后技能失效），返回技能条目。
+/// 名称取文件名去扩展名；内容为文本文件（md/txt 等），非文本按原样复制（读取时按 UTF-8 容错）。
+#[tauri::command]
+pub fn agent_import_skill(app: AppHandle, path: String) -> Result<SkillEntry, String> {
+    let src = std::path::Path::new(&path);
+    if !src.is_file() {
+        return Err("文件不存在或不是普通文件".into());
+    }
+    let stem = src
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "skill".into());
+    let id = format!("sk{}{}", chrono::Utc::now().timestamp_millis(), fastrand_id());
+    let dir = skills_dir(&app)?;
+    let dest = dir.join(format!("{id}.md"));
+    std::fs::copy(src, &dest).map_err(|e| format!("复制技能文件失败：{e}"))?;
+    Ok(SkillEntry { id, name: stem, path: dest.display().to_string() })
+}
+
+/// 删除技能文件（配置条目由前端经 chat_save_config 移除）
+#[tauri::command]
+pub fn agent_delete_skill(path: String) -> Result<(), String> {
+    if path.contains("skills") {
+        let _ = std::fs::remove_file(&path);
+    }
+    Ok(())
+}
+
+fn fastrand_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{n:x}")
 }

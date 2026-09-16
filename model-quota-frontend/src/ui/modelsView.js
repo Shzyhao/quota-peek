@@ -45,7 +45,9 @@ export function mountModelsPage(el, { repo } = {}) {
       <h4 data-role="model-form-title">添加供应商</h4>
       <label>名称<input data-field="name" placeholder="如 DeepSeek / 硅基流动"></label>
       <label>Base URL<input data-field="base_url" placeholder="如 https://api.deepseek.com（OpenAI 兼容接口）"></label>
-      <label>预设模型（每行一个，第一个为默认）<textarea data-field="models" rows="3" placeholder="如&#10;deepseek-chat&#10;deepseek-reasoner"></textarea></label>
+      <label>预设模型（第一个为默认）</label>
+      <div class="model-list-editor" data-role="model-list"></div>
+      <button type="button" class="btn small" data-role="model-add-row">＋ 添加模型</button>
       <label>API Key<input data-field="key" type="password" placeholder="存入 Windows 凭据管理器，不留本地文件（留空 = 不修改）"></label>
       <div class="chat-form-actions">
         <button class="btn" data-role="model-save">保存</button>
@@ -168,16 +170,35 @@ export function mountModelsPage(el, { repo } = {}) {
     $('[data-role="model-form-title"]').textContent = title;
     form.querySelector('[data-field="name"]').value = editing?.name || '';
     form.querySelector('[data-field="base_url"]').value = editing?.base_url || '';
-    form.querySelector('[data-field="models"]').value = (editing?.models || []).join('\n');
+    renderModelList(editing?.models?.length ? editing.models : ['']);
     form.querySelector('[data-field="key"]').value = editing?.key || '';
   }
+
+  // 预设模型列表编辑：每行一个输入框 + 删除钮；至少保留一行
+  function renderModelList(models) {
+    const box = $('[data-role="model-list"]');
+    box.innerHTML = (models.length ? models : [''])
+      .map((m) => `
+        <div class="model-row">
+          <input data-field="model-row" placeholder="模型名，如 deepseek-chat" value="${escapeHtml(m)}">
+          <button type="button" class="btn danger model-row-del" data-role="model-row-del" title="删除该模型">×</button>
+        </div>`).join('');
+  }
+
+  function readModelList() {
+    return [...el.querySelectorAll('[data-field="model-row"]')]
+      .map((i) => i.value.trim())
+      .filter(Boolean);
+  }
+
+  // 原始行值（不过滤空行）：列表编辑增删行时保持用户已输入的内容
+  const rawModelRows = () => [...el.querySelectorAll('[data-field="model-row"]')].map((i) => i.value);
 
   async function saveForm() {
     const form = $('.chat-profile-form');
     const name = form.querySelector('[data-field="name"]').value.trim();
     const base_url = form.querySelector('[data-field="base_url"]').value.trim().replace(/\/+$/, '');
-    const models = form.querySelector('[data-field="models"]').value
-      .split('\n').map((m) => m.trim()).filter(Boolean);
+    const models = readModelList();
     const key = form.querySelector('[data-field="key"]').value.trim();
     if (!name || !base_url || !models.length) {
       showHint('名称 / Base URL / 至少一个模型不能为空');
@@ -223,6 +244,14 @@ export function mountModelsPage(el, { repo } = {}) {
     if (role === 'model-add') {
       editing = { id: null, name: '', base_url: '', models: [], key: '' };
       showForm('添加供应商');
+    } else if (role === 'model-add-row') {
+      renderModelList([...rawModelRows(), '']);
+      const rows = el.querySelectorAll('[data-field="model-row"]');
+      rows[rows.length - 1]?.focus();
+    } else if (role === 'model-row-del') {
+      const rows = [...el.querySelectorAll('[data-field="model-row"]')];
+      if (rows.length <= 1) { rows[0].value = ''; return; }
+      btn.closest('.model-row')?.remove();
     } else if (role === 'model-edit') {
       const p = config.profiles.find((x) => x.id === id);
       if (p) { editing = { ...normalizeProfile(p), key: '' }; showForm(`编辑：${p.name}（Key 留空 = 不修改）`); }

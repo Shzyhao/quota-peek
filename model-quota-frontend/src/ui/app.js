@@ -9,6 +9,9 @@ import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
 import { chatView, mountChatPage } from './chatView.js';
 import { modelsView, mountModelsPage } from './modelsView.js';
+import { notesView, mountNotesPage } from './notesView.js';
+import { agentSettingsCard, mountAgentSettingsCard } from './agentSettings.js';
+import { phoneSettingsCard, mountPhoneCard } from './phoneSettings.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
 import { scheduleView, mountSchedulePage } from './scheduleView.js';
 import { sessionsView, mountSessionsPage } from './sessionsView.js';
@@ -22,6 +25,7 @@ const NAV_ITEMS = [
   { view: 'chat', label: '对话', icon: 'M4 4h16v12H8l-4 4z' },
   { view: 'models', label: '模型配置', icon: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM12 12l8-4.5M12 12v9M12 12L4 7.5' },
   { view: 'sessions', label: '会话记录', icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' },
+  { view: 'notes', label: '便签', icon: 'M9 3h6v3H9zM7 4H6a1 1 0 00-1 1v15a1 1 0 001 1h12a1 1 0 001-1V5a1 1 0 00-1-1h-1M9 10h6M9 14h6' },
   { view: 'analysis', label: '文件分析', icon: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13h6M9 17h4' },
   { view: 'overview', label: '额度总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
   { view: 'providers', label: '供应商', icon: 'M4 6h16M4 12h16M4 18h10' },
@@ -36,6 +40,7 @@ const VIEW_RENDERERS = {
   chat: chatView,
   models: modelsView,
   sessions: sessionsView,
+  notes: notesView,
   analysis: analysisView,
   providers: providersView,
   logs: logsView,
@@ -422,6 +427,9 @@ export function renderApp({ root, repo, logger, service }) {
     } else if (view === 'models') {
       const modelsRoot = content.querySelector('[data-role="models-root"]');
       if (modelsRoot) mountModelsPage(modelsRoot, { repo });
+    } else if (view === 'notes') {
+      const notesRoot = content.querySelector('[data-role="notes-root"]');
+      if (notesRoot) mountNotesPage(notesRoot);
     } else if (view === 'analysis') {
       const analysisRoot = content.querySelector('[data-role="analysis-root"]');
       if (analysisRoot) mountAnalysisPage(analysisRoot);
@@ -433,6 +441,10 @@ export function renderApp({ root, repo, logger, service }) {
       if (sessionsRoot) mountSessionsPage(sessionsRoot, { repo, onOpen: () => { globalThis.location.hash = '#/chat'; } });
     } else if (view === 'settings') {
       mountPetAppearanceCard(content);
+      if (tauriInvoke) {
+        mountAgentSettingsCard(content);
+        mountPhoneCard(content);
+      }
     }
     const navItems = root.querySelectorAll('[data-action="nav"]');
     navItems.forEach((el) => el.classList.toggle('active', el.dataset.view === view));

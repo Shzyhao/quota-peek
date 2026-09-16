@@ -69,7 +69,7 @@ describe('modelsView 模型配置页', () => {
     expect(root.innerHTML).toContain('✓ 密钥已存');
   });
 
-  it('添加供应商：多模型保存 + Key 入凭据管理器 + 自动同步额度查询（类型推断）', async () => {
+  it('添加供应商：模型列表编辑（逐行输入+增删行）+ Key 入凭据管理器 + 自动同步额度查询', async () => {
     const tauri = stubTauri();
     const repo = makeRepo();
     const root = mountPage(repo);
@@ -80,7 +80,13 @@ describe('modelsView 模型配置页', () => {
     await vi.waitFor(() => expect(form.hidden).toBe(false));
     form.querySelector('[data-field="name"]').value = 'Kimi';
     form.querySelector('[data-field="base_url"]').value = 'https://api.moonshot.cn/v1';
-    form.querySelector('[data-field="models"]').value = 'kimi-k2\nkimi-k2-mini';
+    // 列表编辑：默认一行，点「＋ 添加模型」加第二行，逐行填模型名
+    expect(root.querySelectorAll('[data-field="model-row"]')).toHaveLength(1);
+    root.querySelector('[data-role="model-add-row"]').click();
+    const rows = root.querySelectorAll('[data-field="model-row"]');
+    expect(rows).toHaveLength(2);
+    rows[0].value = 'kimi-k2';
+    rows[1].value = 'kimi-k2-mini';
     form.querySelector('[data-field="key"]').value = 'sk-kimi-1';
     root.querySelector('[data-role="model-save"]').click();
 
@@ -100,6 +106,24 @@ describe('modelsView 模型配置页', () => {
     expect(root.querySelector('[data-role="model-hint"]').textContent).toContain('已加入额度查询');
   });
 
+  it('模型列表编辑：删除行剩一行时清空而非移除行；空模型行自动忽略', async () => {
+    stubTauri();
+    const root = mountPage(makeRepo());
+    await vi.waitFor(() => expect(root.querySelector('[data-role="model-add"]')).toBeTruthy());
+    root.querySelector('[data-role="model-add"]').click();
+    await vi.waitFor(() => expect(root.querySelector('.chat-profile-form').hidden).toBe(false));
+
+    // 仅一行时点删除 = 清空内容保留行
+    root.querySelector('[data-role="model-row-del"]').click();
+    expect(root.querySelectorAll('[data-field="model-row"]')).toHaveLength(1);
+    expect(root.querySelector('[data-field="model-row"]').value).toBe('');
+
+    // 两行删一行
+    root.querySelector('[data-role="model-add-row"]').click();
+    root.querySelectorAll('[data-role="model-row-del"]')[0].click();
+    expect(root.querySelectorAll('[data-field="model-row"]')).toHaveLength(1);
+  });
+
   it('已存在的 Base URL 不重复加入额度查询', async () => {
     const tauri = stubTauri();
     const repo = makeRepo();
@@ -112,7 +136,7 @@ describe('modelsView 模型配置页', () => {
     await vi.waitFor(() => expect(form.hidden).toBe(false));
     form.querySelector('[data-field="name"]').value = 'Kimi 备用名';
     form.querySelector('[data-field="base_url"]').value = 'https://api.moonshot.cn/v1';
-    form.querySelector('[data-field="models"]').value = 'kimi-k2';
+    form.querySelector('[data-field="model-row"]').value = 'kimi-k2';
     root.querySelector('[data-role="model-save"]').click();
 
     await vi.waitFor(() => expect(tauri.calls.saveCfg.length).toBeGreaterThan(0));

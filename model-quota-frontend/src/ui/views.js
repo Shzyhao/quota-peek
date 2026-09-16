@@ -11,6 +11,8 @@ import { maskApiKey } from '../core/mask.js';
 import { THEME_LABELS, getStoredTheme } from '../core/theme.js';
 import { escapeHtml, formatMoney, formatNumber, formatDateTime } from './format.js';
 import { petAppearanceCard } from './petSettings.js';
+import { agentSettingsCard } from './agentSettings.js';
+import { phoneSettingsCard } from './phoneSettings.js';
 
 const LOG_STATUS_LABELS = { ok: '成功', failed: '失败', unsupported: '不支持' };
 
@@ -21,6 +23,7 @@ const VIEW_TITLES = {
   chat: '对话',
   models: '模型配置',
   sessions: '会话记录',
+  notes: '便签',
   analysis: '文件分析',
   providers: '供应商',
   logs: '查询日志',
@@ -416,6 +419,8 @@ export function settingsView(ctx) {
         </div>
         <p class="settings-hint">Agent 模式下模型可调用系统工具（时间 / 读文件 / 列目录 / 打开网址 / 写文件 / 命令等），对话输入栏不再单独开关。「只读工具自动批准」仅跳过无副作用调用的确认卡，写文件、命令等操作仍需逐次确认并记录审计日志。改动即时对所有对话窗口（主窗与桌宠面板）生效。</p>
       </section>
+      ${isDesktop ? agentSettingsCard() : ''}
+      ${isDesktop ? phoneSettingsCard() : ''}
       <section class="settings-card">
         <h3>数据备份</h3>
         <p class="settings-hint">${isDesktop

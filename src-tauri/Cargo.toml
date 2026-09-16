@@ -1,6 +1,6 @@
 [package]
 name = "model-quota-app"
-version = "0.14.0"
+version = "0.15.0"
 description = "桌看 - Live2D 桌宠看板娘：AI 对话（文字/语音）· 文件分析 · 额度查询"
 authors = ["model-quota"]
 edition = "2021"
@@ -34,6 +34,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 arboard = "3"
+# 便签剪贴板：OpenClipboard 失败立即报错（带重试上限），规避 arboard 在部分环境死锁
+clipboard-win = "5"
 
 [profile.release]
 opt-level = "s"
