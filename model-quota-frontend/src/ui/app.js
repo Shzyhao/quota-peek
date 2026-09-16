@@ -10,6 +10,7 @@ import { viewTitle, providerCard, homeView, overviewView, providersView, logsVie
 import { chatView, mountChatPage } from './chatView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
 import { scheduleView, mountSchedulePage } from './scheduleView.js';
+import { sessionsView, mountSessionsPage } from './sessionsView.js';
 import { syncScheduleReminders } from '../core/schedule.js';
 import { mountPetAppearanceCard } from './petSettings.js';
 import { updateTrayStatus } from './trayStatus.js';
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { view: 'home', label: '首页', icon: 'M4 11l8-7 8 7M6 10v9h12v-9' },
   { view: 'schedule', label: '日程', icon: 'M8 3v4M16 3v4M4 9h16M5 5h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z' },
   { view: 'chat', label: '对话', icon: 'M4 4h16v12H8l-4 4z' },
+  { view: 'sessions', label: '会话记录', icon: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01' },
   { view: 'analysis', label: '文件分析', icon: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13h6M9 17h4' },
   { view: 'overview', label: '额度总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
   { view: 'providers', label: '供应商', icon: 'M4 6h16M4 12h16M4 18h10' },
@@ -30,6 +32,7 @@ const VIEW_RENDERERS = {
   schedule: scheduleView,
   overview: overviewView,
   chat: chatView,
+  sessions: sessionsView,
   analysis: analysisView,
   providers: providersView,
   logs: logsView,
@@ -419,6 +422,9 @@ export function renderApp({ root, repo, logger, service }) {
     } else if (view === 'schedule') {
       const scheduleRoot = content.querySelector('[data-role="schedule-root"]');
       if (scheduleRoot) mountSchedulePage(scheduleRoot, { repo });
+    } else if (view === 'sessions') {
+      const sessionsRoot = content.querySelector('[data-role="sessions-root"]');
+      if (sessionsRoot) mountSessionsPage(sessionsRoot, { repo, onOpen: () => { globalThis.location.hash = '#/chat'; } });
     } else if (view === 'settings') {
       mountPetAppearanceCard(content);
     }

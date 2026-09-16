@@ -2927,57 +2927,87 @@ input:disabled {
   color: var(--muted);
 }
 
-/* ============ 会话历史面板（主窗「对话」页） ============ */
-.chat-history {
+
+
+/* ============ 会话记录页（独立的对话历史列表） ============ */
+.sessions-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sessions-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   background: var(--surface);
-  padding: 10px 12px;
-  margin-bottom: 8px;
-  max-height: 300px;
-  overflow-y: auto;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
-.chat-history-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
-}
-.chat-history-head b { font-size: 13px; }
-.chat-history-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-s);
-  margin-bottom: 6px;
-  background: var(--surface-2);
-}
-.chat-history-item.active { border-color: var(--primary); background: var(--primary-soft); }
-.chat-history-main {
+.session-item:hover { border-color: var(--primary); }
+.session-item.active { border-color: var(--primary); background: var(--primary-soft); }
+.session-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   cursor: pointer;
 }
-.chat-history-title {
-  font-size: 13px;
+.session-title {
+  font-size: 14px;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.chat-history-item.active .chat-history-title { color: var(--primary); }
-.chat-history-actions { display: flex; gap: 4px; flex: none; }
-.chat-history-actions .btn { padding: 2px 8px; font-size: 12px; }
-.chat-history-rename-input {
+.session-item.active .session-title { color: var(--primary); }
+.session-meta {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-icons {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.session-icon {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.session-icon:hover { background: var(--primary-soft); color: var(--primary); }
+.session-icon.danger:hover { background: var(--error-soft); color: var(--error); }
+.session-icon.ok { color: var(--ok); }
+.session-rename-input {
   flex: 1;
   min-width: 0;
   font: inherit;
-  padding: 3px 8px;
+  padding: 4px 10px;
   border: 1px solid var(--primary);
   border-radius: var(--radius-s);
   background: var(--surface);
