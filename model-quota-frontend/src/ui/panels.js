@@ -4,6 +4,7 @@
 import { chatView, mountChatPage } from './chatView.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
 import { scheduleView, mountSchedulePage } from './scheduleView.js';
+import { mountVoicePage } from './voiceView.js';
 
 function panelShell(root, title, body) {
   document.documentElement.classList.add('panel-mode');
@@ -24,6 +25,11 @@ export function renderChatPanel({ root, repo }) {
   panelShell(root, '对话 · 桌看', '');
   // 面板模式：只留会话与对话内容，模型/语音配置回主窗设置（panel 选项隐藏配置入口）
   mountChatPage(root.querySelector('[data-role="panel-root"]'), { repo, panel: true });
+}
+
+export function renderVoicePanel({ root, repo }) {
+  panelShell(root, '语音对话 · 桌看', '');
+  mountVoicePage(root.querySelector('[data-role="panel-root"]'), { repo });
 }
 
 export function renderAnalysisPanel({ root }) {

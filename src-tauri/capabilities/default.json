@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "主窗口/迷你小窗/悬浮窗/功能弹窗的基础能力：核心权限 + 事件收发（悬浮球交互）+ 迷你窗自绘标题栏（隐藏/拖动）+ 文件选择对话框（文件分析）",
-  "windows": ["main", "mini", "ball", "panel-chat", "panel-analysis", "panel-schedule"],
+  "windows": ["main", "mini", "ball", "panel-chat", "panel-analysis", "panel-schedule", "panel-voice"],
   "permissions": [
     "core:default",
     "core:event:default",

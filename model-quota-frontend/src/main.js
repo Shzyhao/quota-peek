@@ -8,7 +8,7 @@ import { renderApp } from './ui/app.js';
 import { renderMini } from './ui/mini.js';
 import { renderBall } from './ui/ball.js';
 import { renderPet } from './ui/pet.js';
-import { renderChatPanel, renderAnalysisPanel, renderSchedulePanel } from './ui/panels.js';
+import { renderChatPanel, renderAnalysisPanel, renderSchedulePanel, renderVoicePanel } from './ui/panels.js';
 
 initTheme();
 
@@ -39,11 +39,12 @@ const view = new URLSearchParams(window.location.search).get('view')
   || (window.location.hash === '#mini' ? 'mini' : null)
   || (window.location.hash === '#ball' ? 'ball' : null)
   || (window.location.hash === '#pet' ? 'pet' : null);
-const panelMatch = window.location.hash.match(/^#panel-(chat|analysis|schedule)$/);
+const panelMatch = window.location.hash.match(/^#panel-(chat|analysis|schedule|voice)$/);
 if (panelMatch) {
   if (panelMatch[1] === 'chat') renderChatPanel({ root, repo });
   else if (panelMatch[1] === 'analysis') renderAnalysisPanel({ root, repo });
-  else renderSchedulePanel({ root, repo });
+  else if (panelMatch[1] === 'schedule') renderSchedulePanel({ root, repo });
+  else renderVoicePanel({ root, repo });
 } else if (view === 'mini') {
   renderMini({ root, repo, logger, service });
 } else if (view === 'ball') {

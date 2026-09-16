@@ -725,18 +725,8 @@ ${attachmentsToText(pendingAttachments)}` : text,
   });
 
   // 其他窗口（主窗 ↔ 桌宠面板）的会话变化经 storage 事件同步；流式中忽略，结束后再取。
-  // 语音激活标记也走 storage：桌宠菜单「语音对话」写入后，已挂载的面板在这里兜底消费
-  // （面板窗已存在时不会重新 mount）。主窗/迷你窗也会收到本事件——它们不该消费标记，
-  // 更不能删除（抢先删除会让面板永远等不到激活），不满足条件时原样留着等 30s 过期
-  const isPanelChat = () => /#panel-chat/.test(globalThis.location?.hash || '');
+  // （语音激活标记 mqc.voice.pendingActivate 的消费已移交给独立语音面板 voiceView）
   globalThis.addEventListener?.('storage', (e) => {
-    if (e.key === 'mqc.voice.pendingActivate') {
-      if (isPanelChat() && Date.now() - Number(e.newValue || 0) < 30000 && voiceState === 'idle') {
-        localStorage.removeItem('mqc.voice.pendingActivate');
-        void handleMicClick();
-      }
-      return;
-    }
     if (!e.key || (e.key !== 'mqc.chat.sessions' && e.key !== 'mqc.chat.activeSession')) return;
     if (streaming) return;
     ({ sessions, activeId } = loadSessions());
@@ -799,11 +789,4 @@ ${attachmentsToText(pendingAttachments)}` : text,
   // 初始化
   void reloadConfig();
   void refreshVoiceKeyState();
-  // 桌宠菜单「🎙 语音对话」= 打开聊天面板并自动开始录音：面板窗可能是刚创建的
-  // （标记写入早于挂载，storage 事件收不到），挂载时自查待激活标记兜底
-  const pendingAt = Number(localStorage.getItem('mqc.voice.pendingActivate') || 0);
-  if (pendingAt && Date.now() - pendingAt < 30000 && isPanelChat() && voiceState === 'idle') {
-    localStorage.removeItem('mqc.voice.pendingActivate');
-    void handleMicClick();
-  }
 }

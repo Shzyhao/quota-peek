@@ -336,12 +336,13 @@ fn panel_conf(panel: &str) -> Option<(&'static str, &'static str, f64, f64, &'st
         "chat" => Some(("panel-chat", "index.html#panel-chat", 450.0, 560.0, "桌看 · 对话")),
         "analysis" => Some(("panel-analysis", "index.html#panel-analysis", 480.0, 560.0, "桌看 · 文件分析")),
         "schedule" => Some(("panel-schedule", "index.html#panel-schedule", 500.0, 620.0, "桌看 · 日程")),
+        "voice" => Some(("panel-voice", "index.html#panel-voice", 360.0, 540.0, "桌看 · 语音对话")),
         _ => None,
     }
 }
 
 /// 全部功能弹窗 label（互斥切换与批体收起用）
-const PANEL_LABELS: [&str; 3] = ["panel-chat", "panel-analysis", "panel-schedule"];
+const PANEL_LABELS: [&str; 4] = ["panel-chat", "panel-analysis", "panel-schedule", "panel-voice"];
 
 /// 计算功能弹窗锚定桌宠旁的物理坐标：优先右侧，放不下换左侧，整体钳制屏幕内
 fn panel_anchor(app: &AppHandle, w: f64, h: f64) -> Option<(f64, f64)> {
@@ -771,10 +772,11 @@ pub fn run() {
             });
 
             // 前端事件：桌宠菜单「语音对话」→ 仅显示（不 toggle 收起）聊天面板，
-            // 麦克风自动激活由前端经 localStorage 待激活标记驱动
+            // 麦克风自动激活由前端经 localStorage 待激活标记驱动（语音面板挂载时消费）；
+            // 独立语音面板（v0.11.0 起与文字对话面板分开），仅显示不 toggle 收起
             let app_for_voice = app.app_handle().clone();
             app.listen("pet-voice-chat", move |_event| {
-                open_panel(&app_for_voice, "chat", true);
+                open_panel(&app_for_voice, "voice", true);
             });
 
             // 前端事件：低额度系统通知，由 Rust 端发原生 Toast
