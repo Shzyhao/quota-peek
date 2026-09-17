@@ -92,21 +92,25 @@ await withPage(isMain, async ({ ev }) => {
   })()`);
   await ev(`document.querySelector('[data-role="msg-edit-save"]').click()`);
   await sleep(1200);
-  const d = JSON.parse(await ev(`JSON.stringify({
-    sendArgs: JSON.parse(window.__sendArgs || '[]'),
-    stored: JSON.parse(localStorage.getItem('mqc.chat.sessions')).find((s) => s.id === 'sx').messages.map((m) => ({ r: m.role, c: m.content })),
-  })`));
-  note('编辑重发：历史截断且为改写文本', d.stored.length === 2 && d.stored[0].c === '真机改写的问题' && !d.stored[0].c.includes('原始问题'),
-    `msgs=${JSON.stringify(d.stored.map((m) => m.c)).slice(0, 120)}`);
-  note('编辑重发：产生了新回复（失败请求亦证明重新发送）', d.stored[1] && d.stored[1].c !== undefined && d.stored[1].r === 'assistant', `tail=${String(d.stored[1]?.c).slice(0, 60)}`);
-  // 还原会话与原配置
-  await ev(`(async () => {
-    localStorage.removeItem('mqc.chat.sessions');
-    localStorage.removeItem('mqc.chat.activeSession');
-    localStorage.removeItem('mqc.chat.agent');
-    if (window.__origCfg) await __TAURI__.core.invoke('chat_save_config', { cfg: window.__origCfg });
-    return 'restored';
-  })()`);
+  let d = null;
+  try {
+    d = JSON.parse(await ev(`JSON.stringify({
+      sendArgs: JSON.parse(window.__sendArgs || '[]'),
+      stored: JSON.parse(localStorage.getItem('mqc.chat.sessions')).find((s) => s.id === 'sx').messages.map((m) => ({ r: m.role, c: m.content })),
+    })`));
+    note('编辑重发：历史截断且为改写文本', d.stored.length === 2 && d.stored[0].c === '真机改写的问题' && !d.stored[0].c.includes('原始问题'),
+      `msgs=${JSON.stringify(d.stored.map((m) => m.c)).slice(0, 120)}`);
+    note('编辑重发：产生了新回复（失败请求亦证明重新发送）', d.stored[1] && d.stored[1].c !== undefined && d.stored[1].r === 'assistant', `tail=${String(d.stored[1]?.c).slice(0, 60)}`);
+  } finally {
+    // 无论断言成败都还原会话与原配置（防 fake-p 残留污染用户配置）
+    await ev(`(async () => {
+      localStorage.removeItem('mqc.chat.sessions');
+      localStorage.removeItem('mqc.chat.activeSession');
+      localStorage.removeItem('mqc.chat.agent');
+      if (window.__origCfg) await __TAURI__.core.invoke('chat_save_config', { cfg: window.__origCfg });
+      return 'restored';
+    })()`);
+  }
 });
 
 // 3. 便签复制命令已注册（调用返回 ok 或环境错误，但不是"命令不存在"）

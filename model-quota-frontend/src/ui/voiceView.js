@@ -129,7 +129,8 @@ export function mountVoicePage(el, { repo, voiceDeps } = {}) {
   async function doSend(text) {
     if (streaming || !text.trim()) return;
     const cfg = await getChatConfig();
-    const profile = cfg.profiles.find((p) => p.id === cfg.active_profile_id) || null;
+    // 激活项失效（已删/残留）时与后端一致回退首家，不误报"没有对话模型"
+    const profile = cfg.profiles.find((p) => p.id === cfg.active_profile_id) || cfg.profiles[0] || null;
     if (!profile) {
       setStatus('还没有对话模型：请在主窗「模型配置」页添加供应商');
       return;

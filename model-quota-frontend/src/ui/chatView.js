@@ -86,7 +86,6 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     </div>`;
 
   const $ = (sel) => el.querySelector(sel);
-  const $$ = (sel) => el.querySelectorAll(sel);
 
   // ——— 渲染 ———
 
