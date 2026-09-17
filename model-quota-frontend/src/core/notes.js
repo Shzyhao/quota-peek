@@ -5,6 +5,8 @@
 export const CLIP_NOTES_KEY = 'mqc.notes.clipboard';
 export const STICKY_KEY = 'mqc.note.sticky';
 export const MAX_CLIP_NOTES = 20;
+// 单条上限：剪贴板可能复制超大文本（整本书/日志），截断防 localStorage 膨胀
+export const MAX_NOTE_CHARS = 50000;
 
 function readJson(storage, key, fallback) {
   try {
@@ -33,8 +35,9 @@ export function saveStickyNote(note, storage = globalThis.localStorage) {
 /// 追加一条剪贴板记录：与最近一条相同则忽略（去抖）；超 20 条裁最旧。
 /// 返回更新后的列表（调用方负责写回 storage）。
 export function appendClipboardNote(list, text, now = Date.now()) {
-  const t = String(text || '').trim();
+  let t = String(text || '').replace(/\r\n/g, '\n').trim();
   if (!t) return Array.isArray(list) ? list : [];
+  if (t.length > MAX_NOTE_CHARS) t = `${t.slice(0, MAX_NOTE_CHARS)}…（超长已截断）`;
   const rest = (Array.isArray(list) ? list : []).filter((n) => n.text !== t);
   return [{ id: `n-${now.toString(36)}-${Math.random().toString(36).slice(2, 6)}`, text: t, time: now }, ...rest].slice(0, MAX_CLIP_NOTES);
 }

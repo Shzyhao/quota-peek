@@ -267,8 +267,11 @@ export async function getChatConfig() {
   return invoke('chat_get_config');
 }
 
-export async function saveChatConfig(cfg) {
-  return invoke('chat_save_config', { cfg });
+/// 保存配置（合并语义）：只覆盖传入的字段，未传字段（如 agent_prompt/skills）
+/// 保留服务端现值——Rust 端整份覆盖存储，直接透传部分字段会把缺失字段抹成默认值。
+export async function saveChatConfig(part) {
+  const full = await invoke('chat_get_config');
+  return invoke('chat_save_config', { cfg: { ...full, ...part } });
 }
 
 export async function setChatKey(profileId, key) {

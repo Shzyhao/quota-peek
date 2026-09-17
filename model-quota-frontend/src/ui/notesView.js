@@ -23,7 +23,7 @@ export function mountNotesPage(el) {
       <button class="btn primary" data-role="notes-open-window">📝 打开便签小窗</button>
       <button class="btn" data-role="notes-add-current" title="把当前剪贴板内容立即记为一条">📋 记录当前剪贴板</button>
       <button class="btn danger" data-role="notes-clear" ${notes.length ? '' : 'disabled'}>清空记录</button>
-      <span class="settings-hint">电脑上复制的文本会自动记录在这里（保留最近 20 条）</span>
+      <span class="settings-hint" data-role="notes-hint">电脑上复制的文本会自动记录在这里（保留最近 20 条）</span>
     </div>
     <div class="notes-list" data-role="notes-list"></div>
     ${desktop ? '' : '<p class="settings-hint">剪贴板记录仅在桌面版可用，网页版可手动「记录当前剪贴板」。</p>'}`;
@@ -102,13 +102,25 @@ export function mountNotesPage(el) {
         void globalThis.__TAURI__?.core?.invoke?.('open_note_window').catch(() => {});
       }
     } else if (role === 'notes-add-current') {
+      const btn = e.target.closest('[data-role="notes-add-current"]');
       try {
         const text = await globalThis.__TAURI__?.core?.invoke?.('clipboard_read_text');
         notes = appendClipboardNote(notes, String(text || ''));
         persist();
         renderList();
+        if (!String(text || '').trim()) {
+          const hint = $('[data-role="notes-hint"]');
+          if (hint) {
+            hint.textContent = '剪贴板是空的或不可读取（可能被其他程序占用）';
+            setTimeout(() => { hint.textContent = '电脑上复制的文本会自动记录在这里（保留最近 20 条）'; }, 3000);
+          }
+        }
       } catch {
-        /* 网页版：剪贴板权限失败静默 */
+        const hint = $('[data-role="notes-hint"]');
+        if (hint) {
+          hint.textContent = '读取剪贴板失败（可能被其他程序占用），稍后再试';
+          setTimeout(() => { hint.textContent = '电脑上复制的文本会自动记录在这里（保留最近 20 条）'; }, 3000);
+        }
       }
     } else if (role === 'notes-clear') {
       notes = [];

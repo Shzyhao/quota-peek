@@ -2,6 +2,54 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mountNotesPage } from '../src/ui/notesView.js';
 import { mountAgentSettingsCard, agentSettingsCard } from '../src/ui/agentSettings.js';
 import { summarizeSessions, isPhoneActive, setPhoneActive } from '../src/core/phone.js';
+import { saveChatConfig } from '../src/core/chat.js';
+import { appendClipboardNote, MAX_NOTE_CHARS } from '../src/core/notes.js';
+
+describe('saveChatConfig 合并语义（防 Agent 设置被清空）', () => {
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  it('只传部分字段时未传字段保留服务端现值', async () => {
+    const full = { profiles: [{ id: 'p', name: 'A', base_url: 'u', models: ['m'] }], active_profile_id: 'p', active_model: 'm', persona: '', agent_prompt: '我的提示词', skills: [{ id: 's1', name: '技能', path: 'C:/x.md' }] };
+    const saved = [];
+    globalThis.__TAURI__ = {
+      core: {
+        invoke: vi.fn(async (cmd, args) => {
+          if (cmd === 'chat_get_config') return JSON.parse(JSON.stringify(full));
+          if (cmd === 'chat_save_config') { saved.push(args.cfg); return null; }
+          return null;
+        }),
+        Channel: vi.fn(),
+      },
+      event: { emit: vi.fn(), listen: vi.fn(async () => () => {}) },
+    };
+    await saveChatConfig({ profiles: full.profiles, active_profile_id: 'p', active_model: 'm', persona: '' });
+    expect(saved).toHaveLength(1);
+    expect(saved[0].agent_prompt).toBe('我的提示词'); // 未传字段保留
+    expect(saved[0].skills).toEqual([{ id: 's1', name: '技能', path: 'C:/x.md' }]);
+  });
+});
+
+describe('便签单条长度截断', () => {
+  it('超长文本截断到上限', () => {
+    const big = 'x'.repeat(MAX_NOTE_CHARS + 1000);
+    const list = appendClipboardNote([], big);
+    expect(list[0].text.length).toBeLessThanOrEqual(MAX_NOTE_CHARS + 12);
+    expect(list[0].text).toContain('超长已截断');
+    const short = appendClipboardNote([], '短文本');
+    expect(short[0].text).toBe('短文本');
+  });
+});
+
+describe('手机推送内容截断', () => {
+  it('单条消息截断到 4000 字符', () => {
+    const sessions = [{ id: 's', title: 't', updatedAt: 1, messages: [{ role: 'user', content: 'y'.repeat(6000), time: 1 }] }];
+    localStorage.setItem('mqc.chat.sessions', JSON.stringify(sessions));
+    const out = summarizeSessions();
+    expect(out[0].messages[0].content.length).toBe(4000);
+  });
+});
 
 function stubTauri({ clipboard = '剪贴板内容A' } = {}) {
   let cfg = { agent_prompt: '', skills: [], profiles: [] };

@@ -33,7 +33,7 @@ export function summarizeSessions(storage = globalThis.localStorage) {
       messages: (s.messages || [])
         .filter((m) => (m.role === 'user' || m.role === 'assistant') && m.content && !m.tool)
         .slice(-60)
-        .map((m) => ({ role: m.role, content: m.content, time: m.time })),
+        .map((m) => ({ role: m.role, content: String(m.content).slice(0, 4000), time: m.time })),
     }));
   } catch {
     return [];
