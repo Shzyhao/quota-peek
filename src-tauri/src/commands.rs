@@ -253,15 +253,18 @@ pub(crate) fn profile_with_key_by_id(state: &ChatState, profile_id: Option<&str>
 pub(crate) fn agent_system_prompt(state: &ChatState) -> String {
     const SKILL_CAP: usize = 4000;
     const TOTAL_CAP: usize = 16000;
-    let cfg = state.config.lock().unwrap();
+    // 先克隆所需字段并释放配置锁：读技能文件是 IO，不持锁（避免阻塞其他配置读写方）
+    let (user_prompt, skills) = {
+        let cfg = state.config.lock().unwrap();
+        (cfg.agent_prompt.trim().to_string(), cfg.skills.clone())
+    };
     let mut prompt = crate::agent::AGENT_SYSTEM.to_string();
-    let user_prompt = cfg.agent_prompt.trim();
     if !user_prompt.is_empty() {
         prompt.push_str("\n\n【用户预设要求】\n");
         prompt.push_str(&user_prompt.chars().take(SKILL_CAP).collect::<String>());
     }
     let mut total = 0usize;
-    for skill in &cfg.skills {
+    for skill in &skills {
         let Ok(raw) = std::fs::read_to_string(&skill.path) else { continue };
         let mut body: String = raw.chars().take(SKILL_CAP).collect();
         if raw.chars().count() > SKILL_CAP {

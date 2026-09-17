@@ -585,7 +585,14 @@ pub async fn agent_send(
     msgs.extend(messages);
     *agent.messages.lock().unwrap() = msgs;
 
-    let (profile, key, model) = crate::commands::active_profile_with_key(&chat)?;
+    // 注意：running 已置 true，此处早退必须复位，否则 Agent 永久"正在执行中"
+    let (profile, key, model) = match crate::commands::active_profile_with_key(&chat) {
+        Ok(v) => v,
+        Err(e) => {
+            agent.running.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
     let client = AgentClient::new(key, profile.base_url.clone(), model);
 
     let result = run_loop(&app, &agent, &client, &on_event).await;
@@ -680,7 +687,14 @@ pub async fn agent_resolve(
         drop(msgs);
     }
 
-    let (profile, key, model) = crate::commands::active_profile_with_key(&chat)?;
+    // 注意：running 为 true，此处早退必须复位（配置被删/无 Key 场景）
+    let (profile, key, model) = match crate::commands::active_profile_with_key(&chat) {
+        Ok(v) => v,
+        Err(e) => {
+            agent.running.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
     let client = AgentClient::new(key, profile.base_url.clone(), model);
 
     let result = run_loop(&app, &agent, &client, &on_event).await;

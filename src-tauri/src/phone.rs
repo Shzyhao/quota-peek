@@ -6,7 +6,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::State;
@@ -21,6 +21,8 @@ pub struct PhoneState {
     pet_image: Mutex<Arc<String>>,
     active: AtomicBool,
     port: AtomicU16,
+    /// 服务代际：stop 后立刻 start 时，旧线程凭代际不符退出，不再复活旧端口
+    generation: AtomicU64,
 }
 
 impl Default for PhoneState {
@@ -30,6 +32,7 @@ impl Default for PhoneState {
             pet_image: Mutex::new(Arc::new("null".into())),
             active: AtomicBool::new(false),
             port: AtomicU16::new(0),
+            generation: AtomicU64::new(0),
         }
     }
 }
@@ -155,10 +158,11 @@ pub fn phone_server_start(state: State<'_, Arc<PhoneState>>) -> Result<serde_jso
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     state.port.store(port, Ordering::SeqCst);
+    let generation = state.generation.load(Ordering::SeqCst);
     state.active.store(true, Ordering::SeqCst);
     let st = Arc::clone(&state);
     std::thread::spawn(move || {
-        while st.active.load(Ordering::SeqCst) {
+        while st.active.load(Ordering::SeqCst) && st.generation.load(Ordering::SeqCst) == generation {
             match listener.accept() {
                 Ok((stream, _)) => handle_conn(stream, &st),
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -174,6 +178,7 @@ pub fn phone_server_start(state: State<'_, Arc<PhoneState>>) -> Result<serde_jso
 
 #[tauri::command]
 pub fn phone_server_stop(state: State<'_, Arc<PhoneState>>) -> Result<(), String> {
+    state.generation.fetch_add(1, Ordering::SeqCst);
     state.active.store(false, Ordering::SeqCst);
     *state.sessions.lock().unwrap() = Arc::new("null".into());
     *state.pet_image.lock().unwrap() = Arc::new("null".into());

@@ -56,6 +56,7 @@ export function mountPhoneCard(root) {
   }
 
   async function refresh() {
+    if (!card.isConnected) return; // 卡片已卸载（离开设置页），停止刷新
     try {
       info = await phoneServerStatus();
     } catch {

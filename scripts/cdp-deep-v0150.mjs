@@ -159,6 +159,11 @@ await withPage(isMain, async ({ ev }) => {
   } else {
     note('模型切换真机持久化', true, 'skip: 只有一家供应商');
   }
+  // 还原用户原始配置（step2 的切换可能把注入态写回）
+  await ev(`(async () => {
+    if (window.__origCfg) await __TAURI__.core.invoke('chat_save_config', { cfg: window.__origCfg });
+    return 'restored';
+  })()`);
 });
 
 const failed = results.length - results.filter(Boolean).length;

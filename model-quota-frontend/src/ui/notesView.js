@@ -126,7 +126,7 @@ export function mountNotesPage(el) {
 
   // 便签小窗/其他主窗写入的记录经 storage 事件同步
   const onStorage = (e) => {
-    if (e?.key !== 'mqc.notes.clipboard') return;
+    if (e?.key !== 'mqc.notes.clipboard' || !el.isConnected) return;
     notes = loadClipboardNotes();
     renderList();
   };
