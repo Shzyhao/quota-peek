@@ -74,9 +74,11 @@ if (window.location.hash === '#note') {
       } catch {
         /* 同步失败不阻塞启动，进「模型配置」页会再试 */
       }
-      // 便签：主窗轮询剪贴板（最近 20 条）；手机关联：会话摘要推送到局域网服务
-      if (isClipboardAvailable()) startClipboardWatcher();
-      startSessionPusher();
+      // 便签：订阅剪贴板变化（最近 20 条）；手机关联：会话摘要推送到局域网服务
+      if (isClipboardAvailable()) {
+        startClipboardWatcher();
+        startSessionPusher();
+      }
     }
     renderApp({ root, repo, logger, service });
   };

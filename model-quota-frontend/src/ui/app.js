@@ -4,6 +4,7 @@ import { normalizeProviderConfig } from '../core/storage.js';
 import { buildBackup, parseBackup, applyBackup } from '../core/backup.js';
 import { getStoredTheme, setStoredTheme, applyTheme, THEMES } from '../core/theme.js';
 import { secretsAvailable, readSecret, writeSecret, deleteSecret, migrateSecretsToKeyring, cleanupOrphanSecrets } from '../core/secrets.js';
+import { addTombstone } from '../core/models.js';
 import { openProviderForm } from './form.js';
 import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
@@ -342,6 +343,8 @@ export function renderApp({ root, repo, logger, service }) {
     });
     if (!ok) return;
     repo.deleteProvider(id);
+    // 该地址由模型配置同步而来时打遗忘标记，避免下次启动被自动同步加回
+    if (cfg.baseUrl) addTombstone(cfg.baseUrl);
     if (cfg.hasSecret) void deleteSecret(id).catch(() => {});
     render();
     afterDataChange();

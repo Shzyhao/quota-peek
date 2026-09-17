@@ -634,6 +634,7 @@ pub fn run() {
             commands::set_schedule_reminders,
             commands::chat_read_file,
             commands::clipboard_read_text,
+            commands::clipboard_write_text,
             commands::save_text_file,
             commands::agent_import_skill,
             commands::agent_delete_skill,

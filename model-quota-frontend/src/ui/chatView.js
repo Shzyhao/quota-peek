@@ -237,8 +237,9 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
   // 发送一轮对话：调用前保证用户消息已入会话且为 messages 最后一条
   // （doSend 追加新消息；编辑重发则先截断改写历史），两种入口共用本函数
   async function runExchange(text, pendingAttachments) {
-    const hasProfile = config.profiles.some((p) => p.id === config.activeProfileId);
-    if (!hasProfile) { hint = '还没有可用模型：请到主窗「模型配置」页添加供应商'; showHint(); return; }
+    // 激活项失效（已删/残留）时与 Rust 侧一致回退首家，不误报"没有可用模型"
+    const active = resolveActiveSelection(config);
+    if (!active.profileId) { hint = '还没有可用模型：请到主窗「模型配置」页添加供应商'; showHint(); return; }
 
     // 新消息打断上一条朗读（简易打断）；录音中不可能走到这里（麦克风入口已挡）
     stopSpeaking();

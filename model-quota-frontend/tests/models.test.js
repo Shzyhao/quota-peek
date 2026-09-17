@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeBaseUrl, inferProviderType, normalizeProfile, listModelChoices,
   selectionValue, parseSelectionValue, resolveActiveSelection, syncModelsAndQuota,
+  loadTombstones, addTombstone, removeTombstone,
 } from '../src/core/models.js';
 
 describe('normalizeBaseUrl / inferProviderType', () => {
@@ -153,5 +154,32 @@ describe('syncModelsAndQuota 双向同步', () => {
     const r2 = await syncModelsAndQuota(repo, deps);
     expect(r2.addedProviders).toEqual([]);
     expect(repo.listProviders()).toHaveLength(1);
+  });
+});
+
+describe('同步遗忘标记（tombstone）', () => {
+  it('add 去重记录、remove 清除；模型→供应商同步跳过已遗忘地址', async () => {
+    localStorage.clear();
+    addTombstone('https://api.deepseek.com/');
+    addTombstone('https://api.deepseek.com'); // 重复地址去重
+    expect(loadTombstones()).toEqual(['https://api.deepseek.com']);
+
+    const repo = {
+      listProviders: () => [],
+      saveProvider: () => {},
+    };
+    const copies = new Map([['api:p1', 'sk']]);
+    let n = 0;
+    const r = await syncModelsAndQuota(repo, {
+      getCfg: async () => ({ profiles: [{ id: 'p1', name: 'DeepSeek', base_url: 'https://api.deepseek.com', models: ['deepseek-chat'] }] }),
+      saveCfg: async () => {},
+      copyKey: async (from, to) => { if (!copies.has(from)) return false; copies.set(to, copies.get(from)); return true; },
+      hasQuotaKey: async () => true,
+      genId: () => `gen-${++n}`,
+    });
+    expect(r.addedProviders).toEqual([]); // 已遗忘：不再自动补回
+
+    removeTombstone('https://api.deepseek.com');
+    expect(loadTombstones()).toEqual([]);
   });
 });

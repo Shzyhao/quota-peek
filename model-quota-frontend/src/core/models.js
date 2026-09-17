@@ -73,8 +73,39 @@ export function resolveActiveSelection(cfg) {
   return { profileId: prof.id, model: model ?? null };
 }
 
+// 同步遗忘标记：用户删除某家供应商后，双向同步不应把它从模型配置自动加回来。
+// 记录归一化 baseUrl；模型配置里重新保存同地址供应商时清除标记。
+const TOMBSTONES_KEY = 'mqc.syncTombstones';
+
+export function loadTombstones(storage = globalThis.localStorage) {
+  try {
+    const list = JSON.parse(storage?.getItem(TOMBSTONES_KEY) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+export function addTombstone(baseUrl, storage = globalThis.localStorage) {
+  const nb = normalizeBaseUrl(baseUrl);
+  if (!nb) return;
+  const list = loadTombstones(storage);
+  if (!list.includes(nb)) {
+    storage?.setItem(TOMBSTONES_KEY, JSON.stringify([...list, nb]));
+  }
+}
+
+export function removeTombstone(baseUrl, storage = globalThis.localStorage) {
+  const nb = normalizeBaseUrl(baseUrl);
+  const list = loadTombstones(storage);
+  if (list.includes(nb)) {
+    storage?.setItem(TOMBSTONES_KEY, JSON.stringify(list.filter((x) => x !== nb)));
+  }
+}
+
 /// 双向同步（幂等，Base URL 去重）：
 /// 1) 模型配置 → 额度查询：新地址补一条供应商（类型推断），key 复制到 quota 条目；
+///    用户删除过的地址（tombstone）不再自动补回；
 /// 2) 额度查询 → 模型配置：OpenAI 兼容可查类型且已存 Key 的供应商补一条模型供应商，
 ///    key 复制到 api 条目（无 Key 的跳过，避免造出不可用配置）。
 /// 返回 { addedProviders, addedProfiles }（新增名称列表，供界面提示）。
@@ -95,9 +126,10 @@ export async function syncModelsAndQuota(repo, deps = {}) {
     repo.listProviders().map((p) => normalizeBaseUrl(p.baseUrl)).filter(Boolean),
   );
 
+  const tombstones = new Set(loadTombstones());
   for (const prof of profiles) {
     const nb = normalizeBaseUrl(prof.base_url);
-    if (!nb || knownBases.has(nb)) continue;
+    if (!nb || knownBases.has(nb) || tombstones.has(nb)) continue;
     knownBases.add(nb);
     const id = genId();
     const provider = normalizeProviderConfig({

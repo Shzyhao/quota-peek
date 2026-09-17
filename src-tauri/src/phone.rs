@@ -103,10 +103,21 @@ fn status_json(st: &PhoneState) -> serde_json::Value {
 
 fn handle_conn(mut stream: TcpStream, st: &PhoneState) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-    let mut buf = [0u8; 2048];
+    // 循环读到请求头结束（CRLF CRLF）：TCP 分片可能把请求行拆在两次 read 里，
+    // 单次读会解析出半截路径而误 404
     let mut req = Vec::new();
-    if let Ok(n) = stream.read(&mut buf) {
-        req.extend_from_slice(&buf[..n]);
+    let mut buf = [0u8; 1024];
+    for _ in 0..8 {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                req.extend_from_slice(&buf[..n]);
+                if req.windows(4).any(|w| w == b"\r\n\r\n") || req.len() > 8192 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
     }
     let first = String::from_utf8_lossy(&req);
     let path = first.split_whitespace().nth(1).unwrap_or("/");

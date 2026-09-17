@@ -6,7 +6,7 @@
 import {
   getChatConfig, saveChatConfig, setChatKey, hasChatKey, deleteChatKey, isChatAvailable,
 } from '../core/chat.js';
-import { normalizeProfile, syncModelsAndQuota } from '../core/models.js';
+import { normalizeProfile, syncModelsAndQuota, removeTombstone } from '../core/models.js';
 import {
   loadVoiceConfig, saveVoiceConfig, isVoiceConfigured,
   hasVoiceKey, setVoiceKey, deleteVoiceKey, speakText,
@@ -217,6 +217,7 @@ export function mountModelsPage(el, { repo } = {}) {
     if (key) await setChatKey(id, key);
     // 激活项失效（如原配置已删）时落到本供应商
     if (!config.profiles.some((p) => p.id === config.activeProfileId)) config.activeProfileId = id;
+    removeTombstone(base_url); // 用户重新保存 = 恢复自动同步
     await persistConfig();
     editing = null;
     form.hidden = true;

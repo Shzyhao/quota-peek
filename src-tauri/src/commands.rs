@@ -348,7 +348,14 @@ pub fn chat_send(
     if state.running.swap(true, Ordering::SeqCst) {
         return Err("已有对话正在进行".into());
     }
-    let (profile, key, model) = active_profile_with_key(&state)?;
+    // 注意：swap 之后的所有早退路径都必须复位 running，否则对话永久被"正在进行"拒绝
+    let (profile, key, model) = match active_profile_with_key(&state) {
+        Ok(v) => v,
+        Err(e) => {
+            state.running.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
     let persona = {
         let cfg = state.config.lock().unwrap();
         let p = cfg.persona.trim().to_string();
@@ -379,11 +386,18 @@ pub fn chat_send(
                 .send(ChatEvent::Token { text })
                 .map_err(|_| ModelError::Cancelled)
         };
-        let outcome = client.stream_chat(&req, &mut on_token).await;
+        // 180s 硬超时：异常环境（不可达地址等）下 stream_chat 可能长期挂起，
+        // 不复位 running 会让之后所有对话被"已有对话正在进行"拒绝直到重启
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(180),
+            client.stream_chat(&req, &mut on_token),
+        )
+        .await;
         let event = match outcome {
-            Ok(usage) => ChatEvent::Done { usage: Some(usage) },
-            Err(ModelError::Cancelled) => ChatEvent::Cancelled,
-            Err(e) => ChatEvent::Error { message: model_error_message(e) },
+            Ok(Ok(usage)) => ChatEvent::Done { usage: Some(usage) },
+            Ok(Err(ModelError::Cancelled)) => ChatEvent::Cancelled,
+            Ok(Err(e)) => ChatEvent::Error { message: model_error_message(e) },
+            Err(_) => ChatEvent::Error { message: "请求超时（180 秒无响应），已中止".into() },
         };
         let _ = on_event.send(event);
         // 复位 running（窗口可能已销毁，State 取不到，用 app 重新取）
@@ -455,12 +469,25 @@ pub fn analyze_files(
     if state.analyze_running.swap(true, Ordering::SeqCst) {
         return Err("已有分析正在进行".into());
     }
-    let (profile, key) = profile_with_key_by_id(&state, profile_id.as_deref())?;
+    // 注意：swap 之后的所有早退路径都必须复位 analyze_running
+    let (profile, key) = match profile_with_key_by_id(&state, profile_id.as_deref()) {
+        Ok(v) => v,
+        Err(e) => {
+            state.analyze_running.store(false, Ordering::SeqCst);
+            return Err(e);
+        }
+    };
     // 模型名：前端指定 > 该供应商首个预设
-    let model = model
+    let model = match model
         .filter(|m| !m.trim().is_empty())
         .or_else(|| profile.effective_model().map(str::to_string))
-        .ok_or("该供应商没有预设模型，请到「模型配置」页补充")?;
+    {
+        Some(m) => m,
+        None => {
+            state.analyze_running.store(false, Ordering::SeqCst);
+            return Err("该供应商没有预设模型，请到「模型配置」页补充".into());
+        }
+    };
     let files = resolve_files(&paths);
     if files.is_empty() {
         state.analyze_running.store(false, Ordering::SeqCst);
@@ -495,11 +522,15 @@ pub fn analyze_files(
     let app_for_done = app.clone();
 
     tauri::async_runtime::spawn(async move {
-        let outcome = pipeline
-            .analyze_batch(files, &model_cfg, &out_cfg, &mut |ev| {
+        // 30 分钟兜底总超时：挂在连接阶段时 cancel 标志检查不到，不复位会让分析永久"正在进行"
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(30 * 60),
+            pipeline.analyze_batch(files, &model_cfg, &out_cfg, &mut |ev| {
                 events.send(ev).map_err(|_| ())
-            }, Some(&cancel))
-            .await;
+            }, Some(&cancel)),
+        )
+        .await
+        .unwrap_or(Err(liteai_core::PipelineError::Cancelled));
         // 逐文件写历史（与轻析同结构，目录在桌宠配置目录下，互不干扰）
         if let Ok(outcome) = &outcome {
             let now = std::time::SystemTime::now()
