@@ -102,12 +102,19 @@ await withPage(isMain, async ({ ev }) => {
       `msgs=${JSON.stringify(d.stored.map((m) => m.c)).slice(0, 120)}`);
     note('编辑重发：产生了新回复（失败请求亦证明重新发送）', d.stored[1] && d.stored[1].c !== undefined && d.stored[1].r === 'assistant', `tail=${String(d.stored[1]?.c).slice(0, 60)}`);
   } finally {
-    // 无论断言成败都还原会话与原配置（防 fake-p 残留污染用户配置）
+    // 无论断言成败都还原会话与原配置（防 fake-p 残留污染用户配置）；
+    // 假地址可能已被启动同步加进供应商列表，一并清除
     await ev(`(async () => {
       localStorage.removeItem('mqc.chat.sessions');
       localStorage.removeItem('mqc.chat.activeSession');
       localStorage.removeItem('mqc.chat.agent');
       if (window.__origCfg) await __TAURI__.core.invoke('chat_save_config', { cfg: window.__origCfg });
+      const providers = JSON.parse(localStorage.getItem('mqc.providers') || '[]')
+        .filter((p) => !String(p.baseUrl || '').startsWith('http://127.0.0.1:1'));
+      localStorage.setItem('mqc.providers', JSON.stringify(providers));
+      const tb = JSON.parse(localStorage.getItem('mqc.syncTombstones') || '[]')
+        .filter((u) => !u.startsWith('http://127.0.0.1:1'));
+      localStorage.setItem('mqc.syncTombstones', JSON.stringify(tb));
       return 'restored';
     })()`);
   }
