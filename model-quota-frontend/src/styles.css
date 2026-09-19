@@ -3324,3 +3324,126 @@ html.note-mode body {
 .analysis-result-head .analysis-status { flex: 1; }
 
 .analysis-result-head .btn { flex: none; }
+
+/* ============ 用量与趋势页 ============ */
+.usage-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.usage-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--surface);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usage-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.usage-card-head h3 { margin: 0; font-size: 15px; }
+
+.chart-svg { width: 100%; height: auto; display: block; }
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.chart-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.chart-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+
+.chart-bar-label {
+  flex: none;
+  width: 46px;
+  font-size: 12px;
+  color: var(--muted);
+  font-family: Consolas, monospace;
+}
+
+.chart-bar-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.chart-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--primary), #7c5cff);
+  min-width: 2px;
+}
+
+.chart-bar-value {
+  flex: none;
+  width: 70px;
+  text-align: right;
+  font-size: 12px;
+  font-family: Consolas, monospace;
+  color: var(--text-2);
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.usage-table th,
+.usage-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-table th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.usage-table td { font-family: Consolas, monospace; }
+.usage-table td.usage-model { font-weight: 600; font-family: inherit; }
+
+/* 软件更新卡 */
+.updater-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0 6px;
+}
+
+.updater-row .settings-hint { margin: 0; }

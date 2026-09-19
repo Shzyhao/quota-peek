@@ -10,6 +10,7 @@ import {
   sendChat, cancelChat, readChatFile, agentSend, agentResolve, cancelAgent, isReadonlyTool,
 } from '../core/chat.js';
 import { listModelChoices, resolveActiveSelection, selectionValue, parseSelectionValue } from '../core/models.js';
+import { recordUsage } from '../core/usage.js';
 import {
   loadVoiceConfig, saveVoiceConfig, isVoiceConfigured,
   hasVoiceKey, createVoiceRecorder, transcribeAudio, speakText, stopSpeaking, speechFriendlyText,
@@ -68,7 +69,8 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     <div class="chat-toolbar">
       <select data-role="chat-session" title="切换会话（保留最近 10 个）"></select>
       <button class="btn" data-role="chat-session-new" title="新建会话">＋新对话</button>
-      ${panel ? '' : `<button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>`}
+      ${panel ? '' : `<button class="btn" data-role="chat-export" title="导出当前会话为 Markdown">导出</button>
+      <button class="btn danger" data-role="chat-session-del" title="删除当前会话">删除会话</button>`}
       <select data-role="chat-profile" title="当前使用的模型（供应商与模型在主窗「模型配置」页管理）"></select>
     </div>
     <p class="settings-hint chat-hint" data-role="chat-hint" hidden></p>
@@ -239,6 +241,8 @@ export function mountChatPage(el, { repo, voiceDeps, panel = false } = {}) {
     // 激活项失效（已删/残留）时与 Rust 侧一致回退首家，不误报"没有可用模型"
     const active = resolveActiveSelection(config);
     if (!active.profileId) { hint = '还没有可用模型：请到主窗「模型配置」页添加供应商'; showHint(); return; }
+    const usedProfile = config.profiles.find((p) => p.id === active.profileId) || null;
+    const usedModel = active.model;
 
     // 新消息打断上一条朗读（简易打断）；录音中不可能走到这里（麦克风入口已挡）
     stopSpeaking();
@@ -274,7 +278,17 @@ ${attachmentsToText(pendingAttachments)}` : text,
           $('[data-role="chat-messages"]').scrollTop = 1e9;
         }
       },
-      onDone: () => finishExchange(reply, false),
+      onDone: (usage) => {
+        recordUsage({
+          profileId: usedProfile?.id || active.profileId,
+          profileName: usedProfile?.name || '',
+          model: usedModel || '',
+          promptTokens: usage?.prompt_tokens,
+          completionTokens: usage?.completion_tokens,
+          source: 'chat',
+        });
+        finishExchange(reply, false);
+      },
       onError: (msg) => finishExchange(reply || `（请求失败：${msg}）`, true),
       onCancelled: () => finishExchange(reply || '（已停止）', false),
     });
@@ -334,6 +348,46 @@ ${attachmentsToText(pendingAttachments)}` : text,
     } catch {
       hint = '复制失败：剪贴板不可用'; showHint();
     }
+  }
+
+  // ——— 会话导出（当前会话 → Markdown 文件）———
+
+  async function exportSession() {
+    if (!messages.length) { hint = '当前会话还没有内容可导出'; showHint(); return; }
+    const session = sessions.find((s) => s.id === activeId);
+    const title = session?.title || '对话';
+    const pad = (x) => String(x).padStart(2, '0');
+    const stamp = (t) => {
+      if (!t) return '';
+      const d = new Date(t);
+      return `（${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}）`;
+    };
+    const parts = [`# ${title}`, '', `> 导出于 ${new Date().toLocaleString('zh-CN')} · ${messages.length} 条消息 · 桌看（ZhuoKan）`, ''];
+    for (const m of messages) {
+      if (m.tool) {
+        const toolOut = m.tool.output ? `\n> \`${String(m.tool.output).slice(0, 300).replace(/\n/g, ' ')}\`` : '';
+        parts.push(`> 🔧 工具 ${m.tool.name}：${m.tool.ok ? '已执行' : '失败/拒绝'}${toolOut}`, '');
+        continue;
+      }
+      parts.push(`**${m.role === 'user' ? '我' : '桌宠'}**${m.error ? '（出错）' : ''}${stamp(m.time)}：`, '', m.content || '', '');
+      if (m.attachments?.length) {
+        parts.push(`📎 附件：${m.attachments.map((a) => a.name).join('、')}`, '');
+      }
+    }
+    const safeTitle = title.replace(/[/\\:*?"<>|\n\r]/g, '_').slice(0, 40) || '对话';
+    const path = await globalThis.__TAURI__?.dialog?.save?.({
+      title: '导出会话',
+      defaultPath: `会话导出-${safeTitle}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    });
+    if (!path) return;
+    try {
+      await globalThis.__TAURI__.core.invoke('save_text_file', { path, content: parts.join('\n') });
+      hint = `✓ 会话已导出：${path}`;
+    } catch (err) {
+      hint = `✗ 导出失败：${String(err?.message || err)}`;
+    }
+    showHint();
   }
 
   // ——— Agent（单步确认式工具循环）———
@@ -561,6 +615,8 @@ ${attachmentsToText(pendingAttachments)}` : text,
       el.querySelectorAll('.chat-tool-actions button').forEach((b) => (b.disabled = true));
       if (role === 'agent-chain') chainApproved = true;
       await agentResolve(role !== 'agent-deny', agentHandlers, { approveChain: role === 'agent-chain' });
+    } else if (role === 'chat-export') {
+      await exportSession();
     } else if (role === 'chat-session-new') {
       if (streaming) return;
       const fresh = newSession();

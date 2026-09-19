@@ -603,6 +603,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         // 原生文件选择对话框（文件分析模块选文件，返回绝对路径）
         .plugin(tauri_plugin_dialog::init())
+        // 自动更新（GitHub Releases latest.json + minisign 签名）与应用重启
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // 桌宠 AI 对话 + 文件分析命令（流式 Channel + 凭据管理器密钥 + 连接测试 + 轻析管线）
         // 额度密钥（quota_secret_*）/ 后端定时刷新调度 / 托盘动态图标同走命令层
         .invoke_handler(tauri::generate_handler![

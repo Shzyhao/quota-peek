@@ -492,3 +492,85 @@ describe('chatView 模型下拉与消息操作', () => {
     });
   });
 });
+
+// ——— 会话导出（内容生成 + 保存路径）———
+
+describe('chatView 会话导出', () => {
+  let savedFile = null;
+  function exportStubTauri() {
+    savedFile = null;
+    globalThis.__TAURI__ = {
+      core: {
+        invoke: vi.fn(async (cmd, args) => {
+          if (cmd === 'chat_get_config') return { profiles: [{ id: 'p1', name: 'GLM', base_url: 'https://x', models: ['glm-4.6'] }], active_profile_id: 'p1', active_model: 'glm-4.6', persona: '' };
+          if (cmd === 'save_text_file') { savedFile = { path: args.path, content: args.content }; return null; }
+          return null;
+        }),
+        Channel: vi.fn(),
+      },
+      event: { emit: vi.fn(), listen: vi.fn(async () => () => {}) },
+      dialog: { save: vi.fn(async () => 'C:/out/导出测试.md') },
+    };
+  }
+
+  function mountWithSession(messages) {
+    localStorage.setItem('mqc.chat.sessions', JSON.stringify([{ id: 'sx', title: '导出验证会话', createdAt: 1, updatedAt: 1, messages }]));
+    localStorage.setItem('mqc.chat.activeSession', 'sx');
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    return root;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    document.body.innerHTML = '';
+    exportStubTauri();
+  });
+  afterEach(() => {
+    delete globalThis.__TAURI__;
+  });
+
+  it('导出：标题/角色/正文/附件/工具卡转 Markdown 并调用保存', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountChatPage(root, { repo: { listProviders: () => [] } });
+    await vi.waitFor(() => expect(root.querySelector('[data-role="chat-export"]')).toBeTruthy());
+    // 切到带内容的会话
+    localStorage.setItem('mqc.chat.sessions', JSON.stringify([{
+      id: 'sx', title: '导出验证会话', createdAt: 1, updatedAt: 1, messages: [
+        { role: 'user', content: '第一问', time: 1700000000000, attachments: [{ name: '数据.csv' }] },
+        { role: 'assistant', content: '**回复**\n第二行', time: 1700000060000 },
+        { role: 'assistant', content: '', tool: { name: 'run_command', ok: true, output: 'ok output' } },
+      ],
+    }]));
+    localStorage.setItem('mqc.chat.activeSession', 'sx');
+    // 触发 storage 同步重载
+    globalThis.dispatchEvent(new StorageEvent('storage', { key: 'mqc.chat.sessions' }));
+    await vi.waitFor(() => expect(root.querySelectorAll('.chat-bubble').length).toBe(2)); // 工具卡是独立卡片不算气泡
+    await vi.waitFor(() => expect(root.querySelectorAll('.chat-tool-card').length).toBe(1));
+
+    root.querySelector('[data-role="chat-export"]').click();
+    await vi.waitFor(() => expect(savedFile).toBeTruthy());
+    expect(savedFile.path).toBe('C:/out/导出测试.md');
+    const c = savedFile.content;
+    expect(c).toContain('# 导出验证会话');
+    expect(c).toContain('**我**');
+    expect(c).toContain('第一问');
+    expect(c).toContain('**桌宠**');
+    expect(c).toContain('**回复**\n第二行');
+    expect(c).toContain('📎 附件：数据.csv');
+    expect(c).toContain('🔧 工具 run_command：已执行');
+    expect(root.querySelector('[data-role="chat-hint"]').textContent).toContain('✓ 会话已导出');
+  });
+
+  it('空会话导出提示且不保存', async () => {
+    root0 = mountWithSession([]);
+    await vi.waitFor(() => expect(root0.querySelector('[data-role="chat-export"]')).toBeTruthy());
+    root0.querySelector('[data-role="chat-export"]').click();
+    await vi.waitFor(() => expect(root0.querySelector('[data-role="chat-hint"]').textContent).toContain('还没有内容'));
+    expect(savedFile).toBeNull();
+  });
+});
+
+let root0 = null;

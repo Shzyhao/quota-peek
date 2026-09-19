@@ -1,6 +1,6 @@
 [package]
 name = "model-quota-app"
-version = "0.15.0"
+version = "0.16.0"
 description = "桌看 - Live2D 桌宠看板娘：AI 对话（文字/语音）· 文件分析 · 额度查询"
 authors = ["model-quota"]
 edition = "2021"
@@ -17,6 +17,10 @@ tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
+# 自动更新（GitHub Releases latest.json + minisign 签名）与应用重启
+# 构建时需 TAURI_SIGNING_PRIVATE_KEY（路径 ~/.tauri/zhuokan.key，公钥在 tauri.conf.json）
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 语音对话：录音/合成音频字节的 base64 IPC 编解码

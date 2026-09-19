@@ -13,6 +13,7 @@ import { escapeHtml, formatMoney, formatNumber, formatDateTime } from './format.
 import { petAppearanceCard } from './petSettings.js';
 import { agentSettingsCard } from './agentSettings.js';
 import { phoneSettingsCard } from './phoneSettings.js';
+import { updaterCard } from './updaterCard.js';
 
 const LOG_STATUS_LABELS = { ok: '成功', failed: '失败', unsupported: '不支持' };
 
@@ -20,6 +21,7 @@ const VIEW_TITLES = {
   home: '首页',
   schedule: '日程与待办',
   overview: '额度总览',
+  usage: '用量与趋势',
   chat: '对话',
   models: '模型配置',
   sessions: '会话记录',
@@ -421,6 +423,7 @@ export function settingsView(ctx) {
       </section>
       ${isDesktop ? agentSettingsCard() : ''}
       ${isDesktop ? phoneSettingsCard() : ''}
+      ${isDesktop ? updaterCard() : ''}
       <section class="settings-card">
         <h3>数据备份</h3>
         <p class="settings-hint">${isDesktop

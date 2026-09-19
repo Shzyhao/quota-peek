@@ -5,6 +5,8 @@ import { buildBackup, parseBackup, applyBackup } from '../core/backup.js';
 import { getStoredTheme, setStoredTheme, applyTheme, THEMES } from '../core/theme.js';
 import { secretsAvailable, readSecret, writeSecret, deleteSecret, migrateSecretsToKeyring, cleanupOrphanSecrets } from '../core/secrets.js';
 import { addTombstone } from '../core/models.js';
+import { usageView, mountUsagePage } from './usageView.js';
+import { recordBalanceSnapshots } from '../core/usage.js';
 import { openProviderForm } from './form.js';
 import { styledConfirm } from './confirm.js';
 import { viewTitle, providerCard, homeView, overviewView, providersView, logsView, settingsView } from './views.js';
@@ -13,6 +15,7 @@ import { modelsView, mountModelsPage } from './modelsView.js';
 import { notesView, mountNotesPage } from './notesView.js';
 import { agentSettingsCard, mountAgentSettingsCard } from './agentSettings.js';
 import { phoneSettingsCard, mountPhoneCard } from './phoneSettings.js';
+import { mountUpdaterCard } from './updaterCard.js';
 import { analysisView, mountAnalysisPage } from './analysisView.js';
 import { scheduleView, mountSchedulePage } from './scheduleView.js';
 import { sessionsView, mountSessionsPage } from './sessionsView.js';
@@ -29,6 +32,7 @@ const NAV_ITEMS = [
   { view: 'notes', label: '便签', icon: 'M9 3h6v3H9zM7 4H6a1 1 0 00-1 1v15a1 1 0 001 1h12a1 1 0 001-1V5a1 1 0 00-1-1h-1M9 10h6M9 14h6' },
   { view: 'analysis', label: '文件分析', icon: 'M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9zM14 3v6h6M9 13h6M9 17h4' },
   { view: 'overview', label: '额度总览', icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z' },
+  { view: 'usage', label: '用量', icon: 'M3 3v18h18M7 14l4-4 3 3 5-6' },
   { view: 'providers', label: '供应商', icon: 'M4 6h16M4 12h16M4 18h10' },
   { view: 'logs', label: '查询日志', icon: 'M6 4h12v16l-6-3-6 3zM9 9h6' },
   { view: 'settings', label: '设置', icon: 'M12 8a4 4 0 100 8 4 4 0 000-8zM12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19' },
@@ -38,6 +42,7 @@ const VIEW_RENDERERS = {
   home: homeView,
   schedule: scheduleView,
   overview: overviewView,
+  usage: usageView,
   chat: chatView,
   models: modelsView,
   sessions: sessionsView,
@@ -71,6 +76,7 @@ export function renderApp({ root, repo, logger, service }) {
   function afterDataChange() {
     void updateTrayStatus(repo, settings);
     void maybeAlert();
+    recordBalanceSnapshots(repo.listProviders()); // 额度趋势快照（同日同余额自动去重）
   }
 
   // ——— 低额度提醒（'' 关闭 / 'popup' 界面弹窗 / 'notify' 系统通知 / 'pet' 桌宠播报）———
@@ -430,6 +436,9 @@ export function renderApp({ root, repo, logger, service }) {
     } else if (view === 'models') {
       const modelsRoot = content.querySelector('[data-role="models-root"]');
       if (modelsRoot) mountModelsPage(modelsRoot, { repo });
+    } else if (view === 'usage') {
+      const usageRoot = content.querySelector('[data-role="usage-root"]');
+      if (usageRoot) mountUsagePage(usageRoot, { repo });
     } else if (view === 'notes') {
       const notesRoot = content.querySelector('[data-role="notes-root"]');
       if (notesRoot) mountNotesPage(notesRoot);
@@ -447,6 +456,7 @@ export function renderApp({ root, repo, logger, service }) {
       if (tauriInvoke) {
         mountAgentSettingsCard(content);
         mountPhoneCard(content);
+        mountUpdaterCard(content);
       }
     }
     const navItems = root.querySelectorAll('[data-action="nav"]');

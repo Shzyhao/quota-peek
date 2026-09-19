@@ -7,6 +7,7 @@ import {
   loadSessions, saveSessions, appendToSession,
   buildQuotaContext, buildOutgoingMessages, getChatConfig, sendChat, cancelChat,
 } from '../core/chat.js';
+import { recordUsage } from '../core/usage.js';
 import {
   loadVoiceConfig, saveVoiceConfig, isVoiceConfigured, hasVoiceKey,
   createVoiceRecorder, transcribeAudio, speakText, stopSpeaking, speechFriendlyText,
@@ -172,7 +173,17 @@ export function mountVoicePage(el, { repo, voiceDeps } = {}) {
           $('[data-role="voice-messages"]').scrollTop = 1e9;
         }
       },
-      onDone: () => finish(reply, false),
+      onDone: (usage) => {
+        recordUsage({
+          profileId: profile.id,
+          profileName: profile.name || '',
+          model: profile.models?.[0] || profile.model || '',
+          promptTokens: usage?.prompt_tokens,
+          completionTokens: usage?.completion_tokens,
+          source: 'voice',
+        });
+        finish(reply, false);
+      },
       onError: (msg) => finish(reply || `（请求失败：${msg}）`, true),
       onCancelled: () => finish(reply || '（已停止）', false),
     });
